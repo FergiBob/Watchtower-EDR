@@ -1,0 +1,45 @@
+{{ define "base" }}
+
+<!DOCTYPE html>
+<html>
+    <head>
+        <link rel="stylesheet" href="/public/css/global.css">
+        <link rel="stylesheet" href="/public/css/dashboard.css">
+        <title>Watchtower EDR</title>
+    </head>
+    <body class="{{ .Theme }}">
+        <div class="dashboard-container">
+            <aside class="menu">
+                <h2>Watchtower EDR</h2>
+                <nav>
+                    <a href="/">Dashboard</a>
+                    <a href="/agents">Agents</a>
+                    <a href="/reports">Reports</a>
+                    <a href="/settings">Settings</a>
+                </nav>
+            </aside>
+
+            <main class="main-content">
+                <header class="top-nav">
+                    <div class="user-menu">
+                        <button class="user-btn">{{ .Username }}</button>
+                        <div class="dropdown-content">
+                            <a href="/profile">Profile</a>
+                            <form action="/logout" method="POST">
+                                <button type="submit">Logout</button>
+                            </form>
+                        </div>
+                    </div>
+                </header>
+
+                <section class="content-area">
+                    {{ template "content" . }}
+                </section>
+            </main>
+        </div>
+        <script src="/public/js/dashboard.js"></script>
+    </body>
+
+</html>
+
+{{ end }}

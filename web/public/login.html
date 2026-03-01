@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <title>Watchtower EDR: Login</title>
+        <link rel="stylesheet" href="/public/css/login.css" />
+
+        <link
+            rel="stylesheet"
+            href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css"
+        />
+        <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    </head>
+    <body>
+        <div id="login">
+            <div id="error-message">Invalid username or password.</div>
+            <form action="/login" method="POST">
+                <label for="user">Username:</label>
+                <input type="text" id="user" name="username" required />
+
+                <label for="pass">Password:</label>
+                <input type="password" id="pass" name="password" required />
+
+                <button type="submit">Sign In</button>
+            </form>
+        </div>
+
+        <script>
+            // Logic to show the error if the URL has ?error=1
+            const urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.has("error")) {
+                const errorDiv = document.getElementById("error-message");
+                errorDiv.style.display = "block";
+
+                // Optional: Clean the URL so the error doesn't stay if they refresh
+                window.history.replaceState(
+                    {},
+                    document.title,
+                    window.location.pathname,
+                );
+            }
+        </script>
+    </body>
+</html>

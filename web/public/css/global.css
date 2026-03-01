@@ -1,0 +1,75 @@
+/* --- Global Styles & Variables --- */
+
+/* Reset box-sizing to border-box for predictable sizing */
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+/* Used to define a base set of colors */
+:root {
+  /* Base Backgrounds (Grey-dominant) */
+  --bg-main: #121212;         /* Almost black */
+  --bg-surface: #1e1e1e;      /* Dark grey */
+  --bg-input: rgba(30, 30, 30, 0.95);
+  --bg-card: #1a1a1a;         /* Slightly lighter */
+  
+
+  /* Text & UI (Neutral) */
+  --text-primary: #f0f0f0;    /* Soft white */
+  --text-muted: #a0a0a0;      /* Medium grey */
+  --border-color: #333333;    /* Dark grey */
+
+  /* Brand & Actions (Color only here) */
+  --accent: #58b4a0;          /* Teal for buttons/links */
+  --accent-soft: rgba(88, 180, 160, 0.15);
+  --btn-grad-start: #4d9689;  /* Deeper teal */
+  --btn-grad-end: #3a7a6d;    /* Even deeper teal */
+
+  /* Status: Error (Subtle red-grey) */
+  --error-bg: #2a1a1a;        /* Dark red-grey */
+  --error-border: #5a2a2a;
+  --error-text: #ff8888;      /* Soft red for visibility */
+
+  /* Assets & Effects */
+  --radius-lg: 12px;
+  --radius-full: 999px;
+  --shadow-soft: 0 12px 32px rgba(10, 10, 10, 0.8);
+  --transition-fast: 0.18s ease-out;
+  --font-sans: system-ui, -apple-system, sans-serif;
+
+  .theme-orange {
+    --bg-hover: rgba(189, 71, 17, 0.795);
+  }
+  .theme-blue {
+    --bg-hover: rgba(14, 45, 179, 0.671);
+  }
+  .theme-green {
+    --bg-hover: rgba(4, 131, 26, 0.671);
+  }
+  .theme-red {
+    --bg-hover: rgba(194, 18, 18, 0.705);
+  }
+  .theme-pink { /* for my wife */
+    --bg-hover: rgba(255, 20, 216, 0.705);
+  }
+}
+
+
+html, body {
+    height: 100%;
+    font-family: var(--font-sans);
+    background-color: var(--bg);
+    color: var(--text);
+    font-size: 16px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* Optional: Smooth scrolling for the whole page */
+html {
+    scroll-behavior: smooth;
+}

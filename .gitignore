@@ -1,0 +1,15 @@
+internal/data/cpe.db
+
+# Ignore all .log files
+*.log
+
+# Ignore logs directory
+logs/
+
+
+
+# Ignore database files
+*.db
+
+# Ignore configuration files
+*.yaml
