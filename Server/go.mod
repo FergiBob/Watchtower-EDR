@@ -1,4 +1,4 @@
-module watchtower_edr
+module watchtower_edr/server
 
 go 1.25.5
 

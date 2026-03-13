@@ -1,6 +1,6 @@
 // provides functions to handle cloning cpe data and querying cve entries in NIST NVD
 
-package internal
+package data
 
 import (
 	"database/sql"
@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"watchtower_edr/server/internal"
 )
 
 type NVDResponse struct {
@@ -56,7 +57,7 @@ func FormatNVDTime(t time.Time) string {
 // to 120 days ago if the table is empty (to follow NIST 120-day recall rule, will adjust after testing)
 func getSyncStartTime(db *sql.DB) string {
 	var lastSync string
-	// We query for the key; sql.ErrNoRows is returned if it's not there
+	// Query for the key; sql.ErrNoRows is returned if it's not there
 	err := db.QueryRow("SELECT last_sync_timestamp FROM sync_metadata WHERE key = 'nvd_cpe'").Scan(&lastSync)
 
 	if err == sql.ErrNoRows || lastSync == "" { //checks if there are no sync entries and thus, no dictionary entries
@@ -149,9 +150,9 @@ func updateSyncMetadata(db *sql.DB, timestamp string, count int) {
 }
 
 func SyncCPE(db *sql.DB, apiKey string) {
-	// 1. Get the last sync string and parse it into a time.Time object
+	// Get the last sync string and parse it into a time.Time object
 	lastSyncStr := getSyncStartTime(db)
-	// Note: Use the same format string used in FormatNVDTime
+
 	lastSyncTime, err := time.Parse("2006-01-02T15:04:05.000", lastSyncStr)
 	if err != nil {
 		slog.Error("Failed to parse last sync time, defaulting to 120 days ago", "error", err)
@@ -171,12 +172,12 @@ func SyncCPE(db *sql.DB, apiKey string) {
 		slog.Info("Syncing 120-day window", "start", FormatNVDTime(lastSyncTime), "end", FormatNVDTime(windowEnd))
 
 		startIndex := 0
-		resultsPerPage := 5000 // NIST is more stable at 5k than 10k
+		resultsPerPage := 5000 // NIST is more stable at 5k than the 10k hard limit
 
 		// INNER LOOP: Handle pagination within the current time window
 		for {
 			url := fmt.Sprintf("%s?resultsPerPage=%d&startIndex=%d&lastModStartDate=%s&lastModEndDate=%s",
-				AppConfig.NVD.CpeURL, resultsPerPage, startIndex, FormatNVDTime(lastSyncTime), FormatNVDTime(windowEnd))
+				internal.AppConfig.NVD.CpeURL, resultsPerPage, startIndex, FormatNVDTime(lastSyncTime), FormatNVDTime(windowEnd))
 
 			req, _ := http.NewRequest("GET", url, nil)
 			req.Header.Set("apiKey", apiKey)
@@ -214,7 +215,7 @@ func SyncCPE(db *sql.DB, apiKey string) {
 				break
 			}
 
-			// Respect rate limits (Wait longer if you don't have an API key)
+			// Wait to respect rate limit
 			time.Sleep(1 * time.Second)
 		}
 
@@ -224,7 +225,7 @@ func SyncCPE(db *sql.DB, apiKey string) {
 		// Move the cursor forward for the next outer loop iteration
 		lastSyncTime = windowEnd
 
-		// Optional: extra rest between windows
+		// Extra rest between windows to be sure to avoid NIST blacklisting
 		time.Sleep(2 * time.Second)
 	}
 

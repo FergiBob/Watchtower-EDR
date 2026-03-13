@@ -1,11 +1,12 @@
 // defines routes and initializes the web server
 
-package internal
+package handlers
 
 import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"watchtower_edr/server/internal"
 )
 
 // Variable to hold parse html templates
@@ -54,7 +55,7 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 	data := DashboardData{
 		Username:   username,
 		AgentCount: 15, // Example
-		Theme:      AppConfig.UI.Theme,
+		Theme:      internal.AppConfig.UI.Theme,
 	}
 
 	templates.ExecuteTemplate(w, "base", data)
@@ -78,7 +79,7 @@ func StartWebServer() {
 
 	mux.Handle("/logout", http.HandlerFunc(LogoutHandler))
 
-	webPort := AppConfig.Server.WebPort
+	webPort := internal.AppConfig.Server.WebPort
 	slog.Info("Starting Watchtower EDR web server", "port", webPort)
 
 	// Using a named port string like ":8080"

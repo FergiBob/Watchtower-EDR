@@ -9,21 +9,19 @@ import (
 )
 
 // InitLogger() initializes the configuration to be used for slog for the purposes of logging.
-// It utilizes both a log file (watchtower.log) as well as the standard console logging for quick and easy debugging
+// It utilizes both a log file (agent.log) as well as the standard console logging for quick and easy debugging
 func InitLogger() {
 
-	// opens or creates the log file for appending data
-	// O_WRONLY sets the logger permission to write only
-	// 0644 sets read only to all but the owner, which is read and write
+	// sets up the file properties in lumberjack
 	file := &lumberjack.Logger{
-		Filename:   "./internal/logs/watchtower.log",
-		MaxSize:    50, //MB
-		MaxBackups: 8,
+		Filename:   "./internal/logs/agent.log",
+		MaxSize:    10, //MB
+		MaxBackups: 2,
 		MaxAge:     0,    //default (logs do not age out by days)
 		Compress:   true, //old logs will be compressed to save space
 	}
 
-	//sets the multiwriter to write to the watchtower.log and the standard console
+	//sets the multiwriter to write to the agent.log and the standard console
 	multiWriter := io.MultiWriter(os.Stdout, file)
 
 	//creates the slog handler with minimum log level set to info

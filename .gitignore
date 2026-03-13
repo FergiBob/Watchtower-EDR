@@ -1,15 +1,22 @@
-internal/data/cpe.db
+# Binaries and Executables
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
 
-# Ignore all .log files
-*.log
-
-# Ignore logs directory
-logs/
-
-
-
-# Ignore database files
-*.db
-
-# Ignore configuration files
+# Local Configs
+config.json
+*.env
+auth_tokens.txt
 *.yaml
+
+# Go Workspace local overrides
+go.work.sum
+go.work
+
+# Database files and logs
+*.db 
+*.log 
+*.zip

@@ -1,4 +1,4 @@
-package internal
+package handlers
 
 // auth.go provides the authentication logic for the web UI.
 // This includes hashing passwords, protecting routes, generating JWT tokens, etc.
@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+	"watchtower_edr/server/internal/data"
 
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
@@ -49,7 +50,7 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 
 	var storedHash string
 	// Searches for password hash tied to provided username and stores it in "storedHash"
-	err := Main_Database.QueryRow("SELECT password_hash FROM users WHERE username = ?", username).Scan(&storedHash)
+	err := data.Main_Database.QueryRow("SELECT password_hash FROM users WHERE username = ?", username).Scan(&storedHash)
 
 	// Handles errors for password hash query involving the username
 	if err != nil {

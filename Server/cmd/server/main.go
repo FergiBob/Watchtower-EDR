@@ -3,23 +3,26 @@
 package main
 
 import (
-	"watchtower_edr/internal"
+	"watchtower_edr/server/internal"
+	"watchtower_edr/server/internal/data"
+	"watchtower_edr/server/internal/handlers"
+	"watchtower_edr/server/internal/logs"
 )
 
 func main() {
 
 	// Configures the system logger
-	internal.InitLogger()
+	logs.InitLogger()
 
 	// Load the configuration file
 	internal.LoadConfig()
 
 	// Establishes connection to databases and updates cpe dictionary
-	internal.StartDatabases()
+	data.StartDatabases()
 
 	// Updates databases and ensures schemas are correct
-	internal.VerifyDatabases()
+	data.VerifyDatabases()
 
 	// Starts web server services
-	internal.StartWebServer()
+	handlers.StartWebServer()
 }
