@@ -10,7 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
-	"watchtower_edr/server/internal"
+
+	"Watchtower_EDR/server/internal"
 )
 
 type NVDResponse struct {

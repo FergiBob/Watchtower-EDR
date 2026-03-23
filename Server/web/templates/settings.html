@@ -1,0 +1,69 @@
+{{ define "content" }}
+<div class="settings-page">
+
+    {{ if .StatusMessage }}
+    <div class="status-alert {{ if .IsSuccess }}success{{ else }}error{{ end }}">
+        <div class="status-icon">
+            {{ if .IsSuccess }}
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            {{ else }}
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+            {{ end }}
+        </div>
+        <span class="status-text">{{ .StatusMessage }}</span>
+    </div>
+    {{ end }}
+    <div class="page-header">
+        <h1>Settings</h1>
+    </div>
+    <div class="boxed-content">
+        
+        <form action="/settings" method="POST" class="settings-form">
+                <section class="form-section">
+                    <h2>UI Settings</h2>
+                    <div class="form-group">
+                        <label for="theme">Theme</label>
+                        <select name="ui.theme" id="theme">
+                            <option value="blue" {{ if eq $.BaseData.Theme "blue" }}selected{{ end }}>Blue</option>
+                            <option value="lightblue" {{ if eq $.BaseData.Theme "lightblue" }}selected{{ end }}>Light Blue</option>
+                            <option value="green" {{ if eq $.BaseData.Theme "green" }}selected{{ end }}>Green</option>
+                            <option value="yellow" {{ if eq $.BaseData.Theme "yellow" }}selected{{ end }}>Yellow</option>
+                            <option value="red" {{ if eq $.BaseData.Theme "red" }}selected{{ end }}>Red</option>
+                            <option value="pink" {{ if eq $.BaseData.Theme "pink" }}selected{{ end }}>Pink</option>
+                        </select>
+                    </div>
+                </section>
+
+                <section class="form-section">
+                    <h2>NIST NVD Settings</h2>
+                    <div class="form-group">
+                        <label for="api-key">API Key</label>
+                        <input type="text" name="nvd.api_key" id="api-key" 
+                            value="{{ .AppConfig.NVD.APIKey }}" required>
+                        <p class="field-help">
+                            Required for vulnerability syncing. 
+                            <a href="https://nvd.nist.gov/developers/request-an-api-key" target="_blank">Request a free key here</a>.
+                        </p>
+                    </div>
+                </section>
+
+                <section class="form-section">
+                    <h2>Agent Settings</h2>
+                    <div class="form-group">
+                        <label for="stale-timer">Stale Agent Timer (minutes)</label>
+                        <input type="number" name="agents.stale_timer" id="stale-timer" 
+                            value="{{ .AppConfig.Agents.StaleTimer }}" min="1" max="1440" required>
+                    </div>
+                </section>
+
+
+                <div class="form-actions">
+                    <button type="submit" class="btn-primary">Save Settings</button>
+                    <a href="/" class="btn-secondary">Cancel</a>
+                </div>
+            </form>
+
+    </div>
+    
+</div>
+{{ end }}

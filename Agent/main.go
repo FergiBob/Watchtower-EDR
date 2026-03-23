@@ -3,7 +3,8 @@ package main
 import (
 	"log/slog"
 	"os"
-	"watchtower_edr/agent/internal"
+
+	"Watchtower_EDR/agent/internal"
 )
 
 func main() {

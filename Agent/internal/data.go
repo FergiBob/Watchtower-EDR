@@ -10,13 +10,6 @@ import (
 	"time"
 )
 
-// common struct for all data uploads to use
-type Envelope struct {
-	AgentID   string `json:"agent_id"`
-	Timestamp int64  `json:"timestamp"`
-	Payload   any    `json:"payload"`
-}
-
 // uploadData is a helper function that receives an endpoint to POST to and formatted data to marshal and upload
 func uploadData(endpoint string, data any) error {
 	// Convert struct slive into JSON bytes using marshalling

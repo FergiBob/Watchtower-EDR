@@ -1,24 +1,24 @@
 {{ define "content"}}
-<div class="info-tiles">
+<div class="tile-grid">
     <div class="tile">
         <h3>Agents</h3>
         <p class="big-number">{{ .AgentCount }}</p>
         <a href="/agents">View All →</a>
     </div>
     <div class="tile">
-        <h3>Agents</h3>
-        <p class="big-number">{{ .AgentCount }}</p>
+        <h3>Stale Agents</h3>
+        <p class="big-number">{{ .StaleCount }}</p>
         <a href="/agents">View All →</a>
     </div>
     <div class="tile">
-        <h3>Agents</h3>
-        <p class="big-number">{{ .AgentCount }}</p>
-        <a href="/agents">View All →</a>
+        <h3>Vulnerabilities</h3>
+        <p class="big-number">{{ .VulnerabilityCount }}</p>
+        <a href="/reports">View All →</a>
     </div>
     <div class="tile">
-        <h3>Agents</h3>
-        <p class="big-number">{{ .AgentCount }}</p>
-        <a href="/agents">View All →</a>
+        <h3>Software</h3>
+        <p class="big-number">{{ .SoftwareCount }}</p>
+        <a href="/reports">View All →</a>
     </div>
 </div>
 

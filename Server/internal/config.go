@@ -3,11 +3,14 @@
 package internal
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 
 	"gopkg.in/yaml.v3"
 )
+
+var configFile = "./internal/data/config.yaml"
 
 // struct for the configuration to be read from yaml file and used within the program
 type Config struct {
@@ -17,21 +20,36 @@ type Config struct {
 		CveURL string `yaml:"cve_url"`
 	} `yaml:"nvd"`
 	Server struct {
-		WebPort string `yaml:"web_port"`
+		FQDN          string `yaml:"fqdn"`
+		ListenAddress string `yaml:"listen_address"`
 	} `yaml:"server"`
 	UI struct {
 		Theme string `yaml:"theme"`
 	}
 	Database struct {
 		MainDB string `yaml:"main_db_path"`
+		UserDB string `yaml:"user_db_path"`
 		CpeDB  string `yaml:"cpe_db_path"`
 	} `yaml:"database"`
+	Agents struct {
+		StaleTimer int `yaml:"stale_timer"`
+	} `yaml:"agents"`
 }
 
 var AppConfig Config
 
+// Writes config data to the config file (YAML)
+func SaveConfig(cfg Config) error {
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("yaml marhsal: %w", err)
+	}
+
+	return os.WriteFile(configFile, data, 0644)
+}
+
+// Reads config data from the config file (YAML)
 func LoadConfig() {
-	configFile := "config.yaml"
 
 	// Check if file exists and creates it if not
 	if _, err := os.Stat(configFile); os.IsNotExist(err) {
@@ -59,10 +77,13 @@ func createDefaultConfig(path string) {
 	defaultCfg.NVD.APIKey = "YOUR_API_KEY_HERE"
 	defaultCfg.NVD.CpeURL = "https://services.nvd.nist.gov/rest/json/cpes/2.0"
 	defaultCfg.NVD.CveURL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
-	defaultCfg.Server.WebPort = "8080"
+	defaultCfg.Server.FQDN = "watchtower.local"
+	defaultCfg.Server.ListenAddress = "0.0.0.0"
 	defaultCfg.UI.Theme = "theme-orange"
-	defaultCfg.Database.MainDB = "./internal/data/sql-data.db"
+	defaultCfg.Database.MainDB = "./internal/data/main.db"
+	defaultCfg.Database.UserDB = "./internal/data/users.db"
 	defaultCfg.Database.CpeDB = "./internal/data/cpe.db"
+	defaultCfg.Agents.StaleTimer = 60
 
 	data, _ := yaml.Marshal(&defaultCfg)
 	os.WriteFile(path, data, 0644)

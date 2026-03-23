@@ -6,19 +6,15 @@ import (
 	"runtime"
 	"strings"
 
+	"Watchtower_EDR/shared"
+
 	"golang.org/x/sys/windows/registry"
 )
 
 // Software defines the data associated with a given software installation and maps it for use in a json
-type Software struct {
-	Name         string `json:"name"`
-	Version      string `json:"version"`
-	Manufacturer string `json:"manufacturer"`
-	Date         string `json:"date"`
-}
 
 // collectSoftwareData detects the OS and returns a slice of all found software
-func CollectSoftwareData() ([]Software, error) {
+func CollectSoftwareData() ([]shared.Software, error) {
 	switch runtime.GOOS {
 	case "windows":
 		return getWindowsExhaustive()
@@ -31,7 +27,7 @@ func CollectSoftwareData() ([]Software, error) {
 
 // --- Windows Implementation ---
 
-func getWindowsExhaustive() ([]Software, error) {
+func getWindowsExhaustive() ([]shared.Software, error) {
 	sources := []struct {
 		root registry.Key
 		path string
@@ -41,7 +37,7 @@ func getWindowsExhaustive() ([]Software, error) {
 		{registry.CURRENT_USER, `SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall`},
 	}
 
-	softwareMap := make(map[string]Software)
+	softwareMap := make(map[string]shared.Software)
 
 	for _, source := range sources {
 		list, err := vistedRegistryPath(source.root, source.path)
@@ -56,14 +52,14 @@ func getWindowsExhaustive() ([]Software, error) {
 		}
 	}
 
-	var results []Software
+	var results []shared.Software
 	for _, s := range softwareMap {
 		results = append(results, s)
 	}
 	return results, nil
 }
 
-func vistedRegistryPath(root registry.Key, path string) ([]Software, error) {
+func vistedRegistryPath(root registry.Key, path string) ([]shared.Software, error) {
 	k, err := registry.OpenKey(root, path, registry.ENUMERATE_SUB_KEYS|registry.QUERY_VALUE)
 	if err != nil {
 		return nil, err
@@ -75,7 +71,7 @@ func vistedRegistryPath(root registry.Key, path string) ([]Software, error) {
 		return nil, err
 	}
 
-	var results []Software
+	var results []shared.Software
 	for _, sk := range subkeys {
 		subKeyPath := path + `\` + sk
 		s, err := getSoftwareDetailsWin(root, subKeyPath)
@@ -86,10 +82,10 @@ func vistedRegistryPath(root registry.Key, path string) ([]Software, error) {
 	return results, nil
 }
 
-func getSoftwareDetailsWin(root registry.Key, path string) (Software, error) {
+func getSoftwareDetailsWin(root registry.Key, path string) (shared.Software, error) {
 	k, err := registry.OpenKey(root, path, registry.QUERY_VALUE)
 	if err != nil {
-		return Software{}, err
+		return shared.Software{}, err
 	}
 	defer k.Close()
 
@@ -98,7 +94,7 @@ func getSoftwareDetailsWin(root registry.Key, path string) (Software, error) {
 	publisher, _, _ := k.GetStringValue("Publisher")
 	date, _, _ := k.GetStringValue("InstallDate") // Format: YYYYMMDD
 
-	return Software{
+	return shared.Software{
 		Name:         name,
 		Version:      version,
 		Manufacturer: publisher,
@@ -108,8 +104,8 @@ func getSoftwareDetailsWin(root registry.Key, path string) (Software, error) {
 
 // --- Linux Implementation ---
 
-func getLinuxExhaustive() ([]Software, error) {
-	var results []Software
+func getLinuxExhaustive() ([]shared.Software, error) {
+	var results []shared.Software
 
 	// Debian/Ubuntu (dpkg doesn't track exact install date easily,
 	// so we use the status file's last modify or omit if not critical)
@@ -127,13 +123,13 @@ func getLinuxExhaustive() ([]Software, error) {
 	return results, nil
 }
 
-func parseLinuxOutput(output string) []Software {
-	var list []Software
+func parseLinuxOutput(output string) []shared.Software {
+	var list []shared.Software
 	lines := strings.Split(output, "\n")
 	for _, line := range lines {
 		parts := strings.Split(line, ";")
 		if len(parts) >= 3 {
-			s := Software{
+			s := shared.Software{
 				Name:         parts[0],
 				Version:      parts[1],
 				Manufacturer: parts[2],

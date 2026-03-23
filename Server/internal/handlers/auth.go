@@ -9,13 +9,20 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
-	"watchtower_edr/server/internal/data"
+
+	"Watchtower_EDR/server/internal"
+	"Watchtower_EDR/server/internal/data"
 
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 )
 
 var jwtKey = []byte("YOUR_SECRET_KEY") // In production, use an environment variable!
+
+// Any data that has to be passed along to the login page
+type LoginPageData struct {
+	Theme string
+}
 
 // Claims struct for JWT
 type Claims struct {
@@ -38,9 +45,15 @@ func CheckPasswordHash(password string, hash string) bool {
 // Serves the login page content, receives username and password, calls functions to verify credentials, assigns JWT token
 func LoginHandler(w http.ResponseWriter, r *http.Request) {
 
+	// Loads the "static" template for the login page
+	LoadLoginTemplate()
+
 	//sends the login page to the browser
 	if r.Method == http.MethodGet {
-		http.ServeFile(w, r, "./web/public/login.html")
+		data := LoginPageData{
+			Theme: internal.AppConfig.UI.Theme,
+		}
+		templates.ExecuteTemplate(w, "login", data)
 		return
 	}
 
@@ -50,7 +63,7 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 
 	var storedHash string
 	// Searches for password hash tied to provided username and stores it in "storedHash"
-	err := data.Main_Database.QueryRow("SELECT password_hash FROM users WHERE username = ?", username).Scan(&storedHash)
+	err := data.User_Database.QueryRow("SELECT password_hash FROM users WHERE username = ?", username).Scan(&storedHash)
 
 	// Handles errors for password hash query involving the username
 	if err != nil {

@@ -1,3 +1,3 @@
-module watchtower_edr/shared
+module Watchtower_EDR/shared
 
 go 1.25.5
