@@ -84,7 +84,5 @@ func main() {
 		slog.Error("Graceful shutdown failed", "error", err)
 	}
 
-	// Because this is the end of main(), data.CloseDatabases() (deferred above)
-	// will now fire correctly before the process ends.
 	slog.Info("Watchtower is now offline.")
 }

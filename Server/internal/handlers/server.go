@@ -45,7 +45,7 @@ func HandleShutdown(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		time.Sleep(1 * time.Second)
-		// Simply push a 'true' into the channel
+		// Push true as a shutdown signal
 		ShutdownChan <- true
 	}()
 }
