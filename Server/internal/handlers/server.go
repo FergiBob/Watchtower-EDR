@@ -7,8 +7,10 @@ import (
 	"crypto/tls"
 	"log/slog"
 	"net/http"
-	"os"
+	"time"
 )
+
+var ShutdownChan = make(chan bool, 1)
 
 // Wraps a server mux in a recovery block to prevent fatal errors breaking server functionality
 func RecoveryMiddleware(next http.Handler) http.Handler {
@@ -23,16 +25,41 @@ func RecoveryMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+func HandleShutdown(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	username, err := GetUsernameFromToken(r)
+	if err != nil {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		slog.Error("Shutdown attempted. Failed to verify username", "error", err)
+		return
+	}
+	slog.Warn("CRITICAL: Server shutdown initiated via Web UI", "user", username)
+
+	// Give the user a response so they don't get a "Connection Reset" error
+	w.Header().Set("Content-Type", "text/plain")
+	w.Write([]byte("Shutdown initiated. Watchtower is going offline..."))
+
+	go func() {
+		time.Sleep(1 * time.Second)
+		// Simply push a 'true' into the channel
+		ShutdownChan <- true
+	}()
+}
+
 // StartServer starts the TLS server on the defined port and initializes endpoints
 // Returns an error value through a channel
-func StartServer(errChan chan<- error) {
+func BuildServer() (*http.Server, error) {
 
 	// Ensure certificate and key are installed
 	err := SetupCertificates(internal.AppConfig.Server.FQDN)
 	if err != nil {
 		slog.Error("Failed to setup TLS certificates", "error", err, "action", "Exiting")
-		errChan <- err
-		return
+		return nil, err
+
 	}
 
 	// Create shared multiplexer
@@ -54,6 +81,7 @@ func StartServer(errChan chan<- error) {
 	// Protected Routes via AuthMiddleware
 	mux.Handle("/", AuthMiddleware(http.HandlerFunc(homeHandler)))
 	mux.Handle("/settings", AuthMiddleware(http.HandlerFunc(settingsHandler)))
+	mux.Handle("/server/shutdown", AuthMiddleware(http.HandlerFunc(HandleShutdown)))
 
 	// Wrap mux in a recovery handler to prevent server crashes on fatal endpoint errors
 	safeHandler := RecoveryMiddleware(mux)
@@ -67,17 +95,5 @@ func StartServer(errChan chan<- error) {
 		},
 	}
 
-	slog.Info("Watchtower EDR Server starting",
-		"port", "443",
-		"fqdn", internal.AppConfig.Server.FQDN,
-	)
-
-	// Start as HTTPS
-	certPath := "./internal/data/server.crt"
-	keyPath := "./internal/data/server.key"
-	err = server.ListenAndServeTLS(certPath, keyPath)
-	if err != nil && err != http.ErrServerClosed {
-		slog.Error("Watchtower server crashed", "error", err)
-		os.Exit(1)
-	}
+	return server, nil
 }

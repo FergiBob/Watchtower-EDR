@@ -299,17 +299,19 @@ body.login-layout {
 .navigation-container {
     display: flex;
     width: 100%;
-    min-height: 100vh;
+    height: 100vh;
+    overflow: hidden; 
 }
-
 /* --- Sidebar --- */
 .menu {
     width: 260px;
+    height: 100%;
     background: var(--bg-surface);
     border-right: 1px solid var(--border-color);
     padding: 24px;
     display: flex;
     flex-direction: column;
+    overflow-y: auto;
     gap: 32px;
 }
 
@@ -388,8 +390,8 @@ body.login-layout {
     flex: 1;
     display: flex;
     flex-direction: column;
+    height: 100vh;
 }
-
 .top-nav {
     height: 70px;
     background: var(--bg-surface);
@@ -404,7 +406,10 @@ body.login-layout {
 }
 
 .content-area {
+    flex: 1;        
+    overflow-y: auto;  
     padding: 32px;
+    background-color: var(--bg-secondary);
 }
 
 /* ============================================================
@@ -489,6 +494,7 @@ body.login-layout {
     border: 1px solid var(--border-color);
     border-radius: var(--radius-lg);
     padding: 32px;
+    margin-bottom: 2.5em
 }
 
 /* --- Sectioning --- */
@@ -650,3 +656,129 @@ input[readonly] {
     from { opacity: 0; transform: translateY(-10px); }
     to { opacity: 1; transform: translateY(0); }
 }
+
+/* Server Controls Layout */
+.server-controls {
+    padding: 10px 0;
+}
+
+.server-controls h2{
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 10px;
+    margin-bottom: 8px;
+}
+
+.action-buttons {
+    display: flex;
+    gap: 16px;
+    margin-top: 16px;
+}
+
+/* Danger & Warning Buttons */
+.btn-warning {
+    background-color: transparent;
+    border: 1px solid #f59e0b;
+    color: #f59e0b;
+    padding: 10px 20px;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    font-weight: 600;
+    transition: all 0.2s;
+}
+
+.btn-warning:hover {
+    background-color: #f59e0b;
+    color: white;
+}
+
+.btn-danger {
+    background-color: #ef4444;
+    border: none;
+    color: white;
+    padding: 10px 20px;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    font-weight: 600;
+    transition: opacity 0.2s;
+}
+
+.btn-danger:hover {
+    opacity: 0.9;
+}
+
+/* Log Viewer Styles */
+.log-container {
+    background: #1f1f1f; 
+    border-radius: var(--radius-md);
+    border: 1px solid var(--accent-soft);
+    overflow: hidden;
+}
+
+.log-header {
+    background: var(--accent-soft);
+    padding: 8px 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--accent-soft);
+}
+
+.log-status {
+    font-size: 0.75rem;
+    color: #bbbbbb;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.log-viewer {
+    /* Filling the tile */
+    width: 100%;
+    min-height: 400px; /* Increased height */
+    height: 60vh;      /* Scales with screen size */
+    
+    overflow-y: auto;
+    overflow-x: hidden; /* Prevent horizontal scroll, force wrap */
+    padding: 20px;
+    margin: 0;
+    
+    background: #1a1a1a; /* Slightly deeper black */
+    color: #cbd5e1;
+    font-family: 'Fira Code', 'Courier New', monospace;
+    font-size: 0.85rem;
+    line-height: 1.7; /* Breathier lines */
+    
+    /* The Wrapping Secret Sauce */
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    
+    /* Hanging Indent: This distinguishes wraps from new lines */
+    padding-left: 45px;      /* Global left padding */
+    text-indent: -30px;      /* Pulls the FIRST line back out */
+    
+    border-left: 3px solid var(--accent-primary);
+}
+
+
+/* Custom Scrollbar for Logs */
+.log-viewer::-webkit-scrollbar {
+    width: 8px;
+}
+.log-viewer::-webkit-scrollbar-thumb {
+    background: #242424;
+    border-radius: 4px;
+}
+
+.log-time, .log-info, .log-warn, .log-error, .log-attr {
+    display: inline !important;
+}
+
+/* Log types */
+.log-time { color: #64748b; margin-right: 8px; }
+.log-info { color: #22c55e; font-weight: bold; }
+.log-warn { color: #f59e0b; font-weight: bold; }
+.log-error { color: #ef4444; font-weight: bold; }
+.log-attr { color: #94a3b8; font-style: italic; }

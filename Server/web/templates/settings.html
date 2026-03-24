@@ -17,7 +17,6 @@
         <h1>Settings</h1>
     </div>
     <div class="boxed-content">
-        
         <form action="/settings" method="POST" class="settings-form">
                 <section class="form-section">
                     <h2>UI Settings</h2>
@@ -53,6 +52,9 @@
                         <label for="stale-timer">Stale Agent Timer (minutes)</label>
                         <input type="number" name="agents.stale_timer" id="stale-timer" 
                             value="{{ .AppConfig.Agents.StaleTimer }}" min="1" max="1440" required>
+                        <p class="field-help">
+                            Agents last seen by the server past this time will be considered stale. Values must be between 1-1440 minutes (1 day).
+                        </p>
                     </div>
                 </section>
 
@@ -62,8 +64,106 @@
                     <a href="/" class="btn-secondary">Cancel</a>
                 </div>
             </form>
+    </div>
+    <div class="page-header">
+        <h1>Server Management</h1>
+    </div>
+    <div class="boxed-content">
+        <div class="server-controls">
+            <div class="control-card">
+                <h2>System Operations</h2>
+                <p class="field-help">Restarting or shutting down the server will disconnect all active agent sessions.</p>
+                <div class="action-buttons">
+                    <form action="/server/shutdown" method="POST" onsubmit="return confirm('WARNING: This will take the EDR offline. Continue?')">
+                        <button type="submit" class="btn-danger">Shutdown Server</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
 
+    <div class="page-header">
+        <h1>Logs</h1>
+    </div>
+    <div class="boxed-content">
+        <div class="log-container">
+            <div class="log-header">
+                <span class="log-status">Live System Logs</span>
+                <button class="btn-primary" onclick="refreshLogs()">Refresh</button>
+            </div>
+            <pre id="system-logs" class="log-viewer">{{ .Logs }}</pre>
+        </div>
     </div>
     
 </div>
+<script>
+    document.addEventListener("DOMContentLoaded", function() {
+        const logBox = document.getElementById('system-logs');
+        if (!logBox) return;
+
+        // Get raw text content of Log data
+        let rawText = logBox.textContent;
+        
+        const lines = rawText.split('\n').map(line => {
+            if (!line.trim()) return "";
+
+            // Clean the line
+            line = line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+            // Regex parsing of keys to apply classes to the span 
+            let formattedLine = line.replace(/(\w+)=("[^"]*"|[^\s]+)/g, (match, key, value) => {
+                const cleanValue = value.replace(/"/g, '');
+
+                if (key === 'time') return `<span class="log-time">${cleanValue}</span>`;
+                if (key === 'level') return `<span class="log-${cleanValue.toLowerCase()}">${cleanValue}</span>`;
+                if (key === 'msg') return `<span class="log-msg">${cleanValue}</span>`;
+                
+                return `<span class="log-attr">${key}</span>=<span class="log-val">${cleanValue}</span>`;
+            });
+
+            // Wrap the result in a div to separate each line
+            return `<div class="log-entry">${formattedLine}</div>`;
+        });
+
+        // Join the log lines into a single string
+        logBox.innerHTML = lines.join('');
+
+        // 4. Scroll to bottom
+        setTimeout(() => {
+            logBox.scrollTop = logBox.scrollHeight;
+        }, 50);
+    });
+
+    // refreshes the settings page to refresh the log viewer
+    function refreshLogs() {
+        window.location.reload()
+    }
+
+    // Confirms the shutdown request gracefully
+    function handleShutdown(event) {
+    if (!confirm('WARNING: This will take the Watchtower EDR offline. Continue?')) {
+        event.preventDefault();
+        return false;
+    }
+
+    // Shutdown overlay
+    const overlay = document.createElement('div');
+    overlay.id = 'shutdown-overlay';
+    overlay.innerHTML = `
+        <div class="shutdown-message">
+            <div class="spinner"></div>
+            <h1>Watchtower System Offline</h1>
+            <p>The server is shutting down gracefully. You will be redirected to login once the service is back online.</p>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+
+    // Form will now submit naturally
+    return true;
+}
+</script>
+
+
+
+
 {{ end }}

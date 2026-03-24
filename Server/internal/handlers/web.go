@@ -14,6 +14,7 @@ import (
 
 	"Watchtower_EDR/server/internal"
 	"Watchtower_EDR/server/internal/data"
+	"Watchtower_EDR/server/internal/logs"
 )
 
 // Variable to hold parse html templates
@@ -39,6 +40,7 @@ type SettingsData struct {
 	AppConfig     internal.Config
 	StatusMessage string
 	IsSuccess     bool
+	Logs          string
 }
 
 type AgentsData struct {
@@ -163,6 +165,12 @@ func handleSettingsGET(w http.ResponseWriter, r *http.Request, username string) 
 	successStr := r.URL.Query().Get("success")
 	isSuccess := successStr == "true"
 
+	logData, err := logs.GetTailLogs(100)
+	if err != nil {
+		slog.Error("Failed to read log file", "error", err)
+		logData = "Error: Could not load system logs." // pass an error message to the log viewer so the whole page doesn't break
+	}
+
 	data := SettingsData{
 		BaseData: BaseData{
 			Username:    username,
@@ -172,6 +180,7 @@ func handleSettingsGET(w http.ResponseWriter, r *http.Request, username string) 
 		AppConfig:     internal.AppConfig,
 		StatusMessage: msg,
 		IsSuccess:     isSuccess,
+		Logs:          logData,
 	}
 	renderPage(w, "settings.html", data)
 }
