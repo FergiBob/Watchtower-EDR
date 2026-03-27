@@ -18,16 +18,18 @@ type Software struct {
 // Envelope is the common wrapper for all data uploads.
 type Envelope struct {
 	AgentID   string          `json:"agent_id"`
-	Type      string          `json:"type"`
 	Timestamp time.Time       `json:"timestamp"`
 	Payload   json.RawMessage `json:"payload"`
 }
 
-// RegistrationRequest is what the agent sends during helloPacket
+// RegistrationRequest is what the agent sends during helloPacket/enrollment
 type RegistrationRequest struct {
-	Hostname string `json:"hostname"`
-	OS       string `json:"os"`
-	Token    string `json:"token"`
+	MachineID     string `json:"machine_id"`
+	Hostname      string `json:"hostname"`
+	OS            string `json:"os"`
+	OSVersion     string `json:"os_version"`
+	BinaryVersion string `json:"binary_version"`
+	Token         string `json:"token"`
 }
 
 type Agent struct {
@@ -37,14 +39,25 @@ type Agent struct {
 	MachineID string `json:"machine_id"` // Unique HW ID (from registry or /etc/machine-id)
 
 	// System Information
-	OS           string `json:"os"`
-	OSVersion    string `json:"os_version"`
-	Architecture string `json:"arch"` // "amd64", "arm64"
-	LocalIP      string `json:"local_ip"`
+	OS        string `json:"os"`
+	OSVersion string `json:"os_version"`
+	LocalIP   string `json:"local_ip"`
 
 	// Status Tracking
 	Status    string    `json:"status"`        // "online", "offline"
 	FirstSeen time.Time `json:"first_seen"`    // Enrollment timestamp
 	LastSeen  time.Time `json:"last_seen"`     // Last heartbeat/telemetry timestamp
 	Version   string    `json:"agent_version"` // Version of agent binary (e.g., "1.0.2")
+}
+
+// Data received from the agent to the server in a heartbeat
+type HeartbeatData struct {
+	AgentID  string `json:"agent_id"`
+	Hostname string `json:"hostname"`
+}
+
+// Data sent from server to agent in a heartbeat response
+type HeartbeatResponse struct {
+	Status             string `json:"status"`
+	TelemetryFrequency int    `json:"telemetry_freq"`
 }

@@ -3,11 +3,14 @@
 package data
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,17 +65,17 @@ func getSyncStartTime(db *sql.DB) string {
 	err := db.QueryRow("SELECT last_sync_timestamp FROM sync_metadata WHERE key = 'nvd_cpe'").Scan(&lastSync)
 
 	if err == sql.ErrNoRows || lastSync == "" { //checks if there are no sync entries and thus, no dictionary entries
-		slog.Info("No sync history found. Initializing first-time seed from 2002.")
+		slog.Info("No sync history found. Initializing first-time seed from 2002.", "category", "NVD Database")
 		// Start of NVD era (seeds the entire database with all historical data)
 		start := time.Date(2002, 1, 1, 0, 0, 0, 0, time.UTC)
 		return FormatNVDTime(start)
 	} else if err != nil {
-		slog.Error("Database error checking sync metadata", "error", err)
+		slog.Error("Database error checking sync metadata", "error", err, "category", "NVD Database")
 		// Fallback to 120 days ago as a safety measure if DB is acting up
 		return FormatNVDTime(time.Now().AddDate(0, 0, -120))
 	}
 
-	slog.Info("Resuming sync from last recorded timestamp", "timestamp", lastSync)
+	slog.Info("Resuming sync from last recorded timestamp", "timestamp", lastSync, "category", "NVD Database")
 	return lastSync
 }
 
@@ -81,7 +84,7 @@ func processBatch(db *sql.DB, products []CPEProduct) {
 	// begin database transaction
 	tx, err := db.Begin()
 	if err != nil {
-		slog.Error("Failed to begin transaction", "error", err)
+		slog.Error("Failed to begin transaction", "error", err, "category", "NVD Database")
 		return
 	}
 	defer tx.Rollback()
@@ -102,7 +105,7 @@ func processBatch(db *sql.DB, products []CPEProduct) {
             version_end_including=excluded.version_end_including,
             version_end_excluding=excluded.version_end_excluding`)
 	if err != nil {
-		slog.Error("Failed to prepare statement", "error", err)
+		slog.Error("Failed to prepare statement", "error", err, "category", "NVD Database")
 		return
 	}
 	defer stmt.Close()
@@ -125,14 +128,14 @@ func processBatch(db *sql.DB, products []CPEProduct) {
 			p.CPE.VersionEndExcluding,
 		)
 		if err != nil {
-			slog.Warn("Failed to insert CPE", "uri", p.CPE.CpeName, "error", err)
+			slog.Warn("Failed to insert CPE", "uri", p.CPE.CpeName, "error", err, "category", "NVD Database")
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		slog.Error("Failed to commit transaction", "error", err)
+		slog.Error("Failed to commit transaction", "error", err, "category", "NVD Database")
 	} else {
-		slog.Info("Successfully processed batch", "count", len(products))
+		slog.Info("Successfully processed batch", "count", len(products), "category", "NVD Database")
 	}
 }
 
@@ -146,89 +149,134 @@ func updateSyncMetadata(db *sql.DB, timestamp string, count int) {
             record_count = excluded.record_count`,
 		timestamp, count)
 	if err != nil {
-		slog.Error("Failed to update sync metadata", "error", err)
+		slog.Error("Failed to update sync metadata", "error", err, "category", "NVD Database")
 	}
 }
 
-func SyncCPE(db *sql.DB, apiKey string) {
-	// Get the last sync string and parse it into a time.Time object
+// SyncCPE handles the full or incremental update of the CPE database.
+func SyncCPE(ctx context.Context, db *sql.DB, apiKey string) error {
 	lastSyncStr := getSyncStartTime(db)
-
 	lastSyncTime, err := time.Parse("2006-01-02T15:04:05.000", lastSyncStr)
 	if err != nil {
-		slog.Error("Failed to parse last sync time, defaulting to 120 days ago", "error", err)
+		slog.Error("Failed to parse last sync time, defaulting to 120 days ago", "error", err, "category", "NVD Database")
 		lastSyncTime = time.Now().AddDate(0, 0, -120)
 	}
 
 	now := time.Now()
-
-	// OUTER LOOP: Move through time in 120-day chunks
 	for lastSyncTime.Before(now) {
-		// Calculate the end of this 120-day window
 		windowEnd := lastSyncTime.AddDate(0, 0, 120)
 		if windowEnd.After(now) {
 			windowEnd = now
 		}
 
-		slog.Info("Syncing 120-day window", "start", FormatNVDTime(lastSyncTime), "end", FormatNVDTime(windowEnd))
+		// If windowEnd is somehow before or equal to lastSyncTime due to clock drift, stop.
+		if !lastSyncTime.Before(windowEnd) {
+			break
+		}
 
+		slog.Info("Syncing 120-day window", "start", FormatNVDTime(lastSyncTime), "end", FormatNVDTime(windowEnd), "category", "NVD Database")
 		startIndex := 0
-		resultsPerPage := 5000 // NIST is more stable at 5k than the 10k hard limit
+		resultsPerPage := 5000
 
-		// INNER LOOP: Handle pagination within the current time window
 		for {
-			url := fmt.Sprintf("%s?resultsPerPage=%d&startIndex=%d&lastModStartDate=%s&lastModEndDate=%s",
-				internal.AppConfig.NVD.CpeURL, resultsPerPage, startIndex, FormatNVDTime(lastSyncTime), FormatNVDTime(windowEnd))
+			// Check if context was cancelled
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("sync interrupted by shutdown")
+			default:
+			}
 
-			req, _ := http.NewRequest("GET", url, nil)
+			// Build URL safely
+			params := url.Values{}
+			params.Add("resultsPerPage", strconv.Itoa(resultsPerPage))
+			params.Add("startIndex", strconv.Itoa(startIndex))
+			params.Add("lastModStartDate", FormatNVDTime(lastSyncTime))
+			params.Add("lastModEndDate", FormatNVDTime(windowEnd))
+			fullURL := internal.AppConfig.NVD.CpeURL + "?" + params.Encode()
+
+			req, _ := http.NewRequestWithContext(ctx, "GET", fullURL, nil)
 			req.Header.Set("apiKey", apiKey)
+			req.Header.Set("User-Agent", "WatchtowerEDR-CPE-Updater")
 
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
-				slog.Error("Network error during sync", "err", err)
-				return // Stop the sync to prevent data gaps
+				return fmt.Errorf("network error during CPE sync: %w", err)
 			}
-
 			if resp.StatusCode != http.StatusOK {
-				slog.Error("NVD API returned error status", "status", resp.Status)
 				resp.Body.Close()
-				return
+				return fmt.Errorf("NVD API returned error status: %s", resp.Status)
 			}
 
 			var data NVDResponse
+			// Load CPE json data into struct
 			if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-				slog.Error("Failed to decode NVD JSON", "error", err)
 				resp.Body.Close()
-				return
+				return fmt.Errorf("failed to decode NVD JSON: %w", err)
 			}
 			resp.Body.Close()
 
-			// Batch insert the current page
+			// Check if there is data, then process it in batches
 			if len(data.Products) > 0 {
 				processBatch(db, data.Products)
 			}
 
-			slog.Info("Progress", "totalResults", data.TotalResults, "currentStartIndex", startIndex)
-
-			// Check if we need to keep paginating
+			// Log progress and increment index
+			slog.Info("Progress", "totalResults", data.TotalResults, "currentStartIndex", startIndex, "category", "NVD Database")
 			startIndex += resultsPerPage
 			if startIndex >= data.TotalResults {
 				break
 			}
-
-			// Wait to respect rate limit
 			time.Sleep(1 * time.Second)
 		}
 
-		// Update metadata AFTER each window is fully successfully processed
 		updateSyncMetadata(db, FormatNVDTime(windowEnd), 0)
-
-		// Move the cursor forward for the next outer loop iteration
 		lastSyncTime = windowEnd
-
-		// Extra rest between windows to be sure to avoid NIST blacklisting
 		time.Sleep(2 * time.Second)
 	}
+	slog.Info("CPE Dictionary is fully up to date", "category", "NVD Database")
+	return nil
+}
 
-	slog.Info("CPE Dictionary is fully up to date")
+// Starts a schedule to update the CPE database
+func StartCPEUpdater(ctx context.Context) {
+	db := CPE_Database
+	apikey := internal.AppConfig.NVD.APIKey
+	ticker := time.NewTicker(12 * time.Hour)
+
+	if apikey == "" || apikey == "YOUR_API_KEY_HERE" {
+		slog.Error("NVD API Key missing. CPE Sync disabled.", "category", "NVD Database")
+		return
+	}
+
+	// Run the initial catch-up immediately
+	go func() {
+		if err := SyncCPE(ctx, db, apikey); err != nil {
+			slog.Error("Initial CPE sync failed", "error", err, "category", "NVD Database")
+		}
+	}()
+
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				slog.Info("Starting scheduled 12-hour CPE sync...", "category", "NVD Database")
+				if err := SyncCPE(ctx, db, apikey); err != nil {
+					slog.Error("CPE sync failed, scheduling retry in 1 hour", "error", err, "category", "NVD Database")
+
+					// Schedule a one-time retry
+					time.AfterFunc(1*time.Hour, func() {
+						slog.Info("Retrying CPE sync...", "category", "NVD Database")
+						if err := SyncCPE(ctx, db, apikey); err != nil {
+							slog.Error("Retry failed. Will wait for next 12hr cycle.", "category", "NVD Database")
+						}
+					})
+				}
+
+			case <-ctx.Done():
+				slog.Info("CPE Updater background worker stopped.", "category", "NVD Database")
+				return
+			}
+		}
+	}()
 }

@@ -67,8 +67,9 @@ func BuildServer() (*http.Server, error) {
 
 	// --- AGENT API ---
 	// Machine-to-machine traffic
-	mux.HandleFunc("POST /api/v1/agent/enroll", AddAgent)
-	mux.HandleFunc("POST /api/v1/agent/telemetry", handleTelemetry)
+	mux.HandleFunc("POST /api/v1/agent/enroll", handleAgentEnrollment)
+	mux.HandleFunc("POST /api/v1/agent/heartbeat", HandleHeartbeat)
+	mux.HandleFunc("POST /api/v1/agent/telemetry/software", HandleSoftwareTelemetry)
 
 	// --- WEB UI PUBLIC ASSETS ---
 	fileServer := http.FileServer(http.Dir("./web/public"))

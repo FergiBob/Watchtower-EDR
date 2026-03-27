@@ -227,7 +227,7 @@ body.login-layout {
 }
 
 /* ============================================================
-   USER MENU & TOP NAV (Base.html components)
+   USER MENU & TOP NAV
 ============================================================ */
 
 .user-menu {
@@ -311,8 +311,44 @@ body.login-layout {
     padding: 24px;
     display: flex;
     flex-direction: column;
-    overflow-y: auto;
     gap: 32px;
+    
+    /* Required for the backsplash positioning */
+    position: relative; 
+    overflow: hidden;   
+    z-index: 1;
+}
+
+/* The Backsplash Effect */
+.menu::after {
+    content: "";
+    position: absolute;
+    
+   
+    bottom: 0;
+    
+    /* Causes logo to peek from the right */
+    right: -32vh; 
+
+    /* Scales logo size dynamically */
+    width: 70vh;
+    height: 70vh;
+    
+    background-image: var(--sidebar-logo);
+    background-size: contain;
+    background-repeat: no-repeat;
+    
+    
+    background-position: right bottom; 
+    
+    opacity: 0.09;
+    filter: grayscale(0.3);
+    pointer-events: none;
+    z-index: -1;
+
+    
+    top: auto;
+    transform: none;
 }
 
 .sidebar-header {
@@ -322,12 +358,6 @@ body.login-layout {
     margin-bottom: 24px; 
 }
 
-
-.sidebar-logo {
-    width: 55px;
-    height: 55px;
-    object-fit: contain;
-}
 
 .nav-title {
     display: block;
@@ -342,10 +372,11 @@ body.login-layout {
 }
 
 .menu h2 {
-    font-size: 1.1rem; 
+    font-size: 1.3rem; 
     font-weight: 700;
     margin: 0;
     white-space: nowrap;
+
 }
 
 .menu nav {

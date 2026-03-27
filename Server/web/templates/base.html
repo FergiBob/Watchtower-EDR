@@ -1,8 +1,10 @@
 {{ define "base" }}
 
 <!DOCTYPE html>
-<html>
+<html lang="en">
     <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <link rel="stylesheet" href="/public/css/styles.css">
         
         <link rel="icon" type="image/png" href="/public/img/logo_{{ .BaseData.Theme }}.png" />
@@ -10,11 +12,11 @@
     </head>
     <body class="{{ .BaseData.Theme }}">
         <div class="navigation-container">
-            <aside class="menu">
+            <aside class="menu" style="--sidebar-logo: url('/public/img/logo_{{ .BaseData.Theme }}.png');">
                 <div class="sidebar-header">
-                    <img src="/public/img/logo_{{ .BaseData.Theme }}.png" alt="Logo" class="sidebar-logo"/>
                     <h2>Watchtower EDR</h2>
                 </div>
+                
                 <nav>
                     <span class="nav-title">Menu</span>
                     
@@ -48,7 +50,6 @@
         </div>
         <script src="/public/js/base.js"></script>
     </body>
-
 </html>
 
 {{ end }}

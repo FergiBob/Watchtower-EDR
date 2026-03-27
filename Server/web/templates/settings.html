@@ -50,13 +50,30 @@
                 <section class="form-section">
                     <h2>Agent Settings</h2>
                     <div class="form-group">
-                        <label for="stale-timer">Stale Agent Timer (minutes)</label>
-                        <input type="number" name="agents.stale_timer" id="stale-timer" 
-                            value="{{ .AppConfig.Agents.StaleTimer }}" min="1" max="1440" required>
+                        <label for="telemetry-freq">Telemetry Frequency (minutes)</label>
+                        <input type="number" name="agents.telemetry_freq" id="telemetry-freq" 
+                            value="{{ .AppConfig.Agents.TelemetryFrequency }}" min="1" max="30" required>
                         <p class="field-help">
-                            Agents last seen by the server past this time will be considered stale. Values must be between 1-1440 minutes (1 day).
+                            This is how frequently agents will send reports to the server. Values range from 1-30 minutes.
                         </p>
                     </div>
+                    <div class="form-group">
+                        <label for="offline-timer">Offline Agent Timer (minutes)</label>
+                        <input type="number" name="agents.offline_timer" id="offline-timer" 
+                            value="{{ .AppConfig.Agents.OfflineTimer }}" min="2" max="1440" required>
+                        <p class="field-help">
+                            Agents last seen by the server past this time will be considered offline (not decommissioned). Values must be between 2-1440 minutes (1 day).
+                        </p>
+                    </div>
+                    <div class="form-group">
+                        <label for="enrollment-token">Enrollment Token</label>
+                        <input type="text" name="agents.enrollment_token" id="enrollment-token" 
+                            value="{{ .AppConfig.Agents.EnrollmentToken }}" required>
+                        <p class="field-help">
+                            This token will be used to verify agents when they attempt to enroll. Length must be between 16-40 characters.
+                        </p>
+                    </div>
+                    
                 </section>
 
 

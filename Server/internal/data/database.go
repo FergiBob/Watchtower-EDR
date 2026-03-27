@@ -146,16 +146,16 @@ func setupMainSQL(db *sql.DB) {
 		PRAGMA foreign_keys = ON;
 		CREATE TABLE IF NOT EXISTS agents (
 			agent_id TEXT PRIMARY KEY,
-			machine_id TEXT,
+			machine_id TEXT UNIQUE, 
 			hostname TEXT,
 			ip_address TEXT,
 			os TEXT,
 			os_version TEXT,
-			architecture TEXT,
-			last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-			first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-			status TEXT,
-			binary_version TEXT
+			status TEXT DEFAULT 'active',
+			binary_version TEXT,
+			last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+			first_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+			description TEXT DEFAULT ''
 		);
 
 		CREATE TABLE IF NOT EXISTS software (
@@ -251,16 +251,6 @@ func VerifyDatabases() {
 	setupNVDDictionary(CPE_Database)
 	setupMainSQL(Main_Database)
 
-	nvdAPIKey := internal.AppConfig.NVD.APIKey
-
-	// Checks to ensure
-	if nvdAPIKey == "YOUR_API_KEY_HERE" {
-		slog.Error("NVD API Key not configured. Unable to sync CPE Database")
-		return
-	}
-
-	// Performs a NIST CPE data-sync
-	SyncCPE(CPE_Database, nvdAPIKey)
 }
 
 // -------------------- ARCHIVE HANDLING --------------------------

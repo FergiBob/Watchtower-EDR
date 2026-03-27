@@ -32,7 +32,9 @@ type Config struct {
 		CpeDB  string `yaml:"cpe_db_path"`
 	} `yaml:"database"`
 	Agents struct {
-		StaleTimer int `yaml:"stale_timer"`
+		OfflineTimer       int    `yaml:"unresponsive_timer"`
+		TelemetryFrequency int    `yaml:"telemetry_freq"`
+		EnrollmentToken    string `yaml:"enrollment_token"`
 	} `yaml:"agents"`
 }
 
@@ -79,11 +81,13 @@ func createDefaultConfig(path string) {
 	defaultCfg.NVD.CveURL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 	defaultCfg.Server.FQDN = "watchtower.local"
 	defaultCfg.Server.ListenAddress = "0.0.0.0"
-	defaultCfg.UI.Theme = "theme-orange"
+	defaultCfg.UI.Theme = "orange"
 	defaultCfg.Database.MainDB = "./internal/data/main.db"
 	defaultCfg.Database.UserDB = "./internal/data/users.db"
 	defaultCfg.Database.CpeDB = "./internal/data/cpe.db"
-	defaultCfg.Agents.StaleTimer = 60
+	defaultCfg.Agents.OfflineTimer = 60
+	defaultCfg.Agents.TelemetryFrequency = 5
+	defaultCfg.Agents.EnrollmentToken = "WATCHTOWER_EDR_SECRET"
 
 	data, _ := yaml.Marshal(&defaultCfg)
 	os.WriteFile(path, data, 0644)

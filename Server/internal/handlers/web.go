@@ -74,7 +74,7 @@ func getDashboardData() (DashboardData, error) {
             (SELECT COUNT(DISTINCT name) FROM software) AS software_count
     `
 
-	modifier := fmt.Sprintf("%d minutes", internal.AppConfig.Agents.StaleTimer)
+	modifier := fmt.Sprintf("%d minutes", internal.AppConfig.Agents.OfflineTimer)
 	query := fmt.Sprintf(baseQuery, modifier) // Simpler than strings.ReplaceAll
 
 	var d DashboardData
@@ -91,7 +91,7 @@ func getDashboardData() (DashboardData, error) {
 
 // Updates a temporary config with the values from the settings form. Returns a message (either error or success), and bool value to tell the handler if the operation was successful
 func updateConfigFromForm(cfg *internal.Config, form url.Values) (string, bool) {
-	// UI Theme
+	// UI Theme -------------------
 	theme := strings.TrimSpace(form.Get("ui.theme"))
 	if theme == "" {
 		return "Theme selection is required.", false
@@ -110,19 +110,46 @@ func updateConfigFromForm(cfg *internal.Config, form url.Values) (string, bool) 
 	}
 	cfg.UI.Theme = theme
 
-	// Agent Settings
-	staleStr := strings.TrimSpace(form.Get("agents.stale_timer"))
-	if staleStr == "" {
-		return "Stale Agent Timer is required.", false
+	// Agent Settings -------------
+
+	// Agent Telemetry Frequency
+	telemetryFreqStr := strings.TrimSpace(form.Get("agents.telemetry_freq"))
+	if telemetryFreqStr == "" {
+		return "Telemetry Frequency is required.", false
 	}
 
-	stale, err := strconv.Atoi(staleStr)
-	if err != nil || stale <= 0 || stale > 1440 {
-		return "Stale timer must be a number between 1 and 1440 minutes.", false
+	telemetryFreq, err := strconv.Atoi(telemetryFreqStr)
+	if err != nil || telemetryFreq < 1 || telemetryFreq > 30 {
+		return "Agent Telemetry Frequency must be a number between 1 and 30.", false
 	}
-	cfg.Agents.StaleTimer = stale
+	cfg.Agents.TelemetryFrequency = telemetryFreq
 
-	// NVD Settings
+	// Agent Unresponsive Timer
+	offlineStr := strings.TrimSpace(form.Get("agents.unresponsive_timer"))
+	if offlineStr == "" {
+		return "Unresponsive Agent Timer is required.", false
+	}
+
+	offline, err := strconv.Atoi(offlineStr)
+	if err != nil || offline < 2 || offline > 1440 {
+		return "Unresponsive Agent Timer must be a number between 2 and 1440.", false
+	}
+	cfg.Agents.OfflineTimer = offline
+
+	// Agent Enrollment Token
+	enrollmentToken := strings.TrimSpace(form.Get("agents.enrollment_token"))
+
+	if enrollmentToken == "" {
+		return "Agent Enrollment Token is required.", false
+	}
+
+	enrollCount := utf8.RuneCountInString(enrollmentToken)
+	if enrollCount < 16 || enrollCount > 40 {
+		return "Invalid Agent Enrollment Key format.", false
+	}
+	cfg.Agents.EnrollmentToken = enrollmentToken
+
+	// NVD Settings ----------------
 	apikey := strings.TrimSpace(form.Get("nvd.api_key"))
 
 	if apikey == "" {
@@ -130,8 +157,8 @@ func updateConfigFromForm(cfg *internal.Config, form url.Values) (string, bool) 
 	}
 
 	// NVD Keys are typically UUIDs (36 chars), but we allow up to 40 for buffer
-	count := utf8.RuneCountInString(apikey)
-	if count != 36 {
+	apiCount := utf8.RuneCountInString(apikey)
+	if apiCount != 36 {
 		return "Invalid API Key format. Please check your NIST NVD key.", false
 	}
 

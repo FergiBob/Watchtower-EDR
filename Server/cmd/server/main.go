@@ -31,7 +31,14 @@ func main() {
 	// Updates databases and ensures schemas are correct
 	data.VerifyDatabases()
 
-	// Channel for OS signals (Physical CTRL+C)
+	// Create a context to trigger graceful stops of background tasks
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Start Background Tasks
+	data.StartCPEUpdater(ctx)
+
+	// Channel for OS signals (Physical CTRL+C) used to stop the server
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
@@ -70,17 +77,20 @@ func main() {
 		slog.Info("Shutdown signal received from Web UI")
 	}
 
+	// Trigger cancellation of background tasks (scheduled taks like CPE Updater, Agent Cleaner, and Agent Status Updater)
+	cancel()
+
 	// --------------------------------------------------------
 	//                  GRACEFUL SHUTDOWN
 	//---------------------------------------------------------
 	slog.Info("Shutting down Watchtower EDR Server and closing connections...")
 
 	// Create a context with a 5-second timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
 
 	// This gracefully stops the server
-	if err := srv.Shutdown(ctx); err != nil {
+	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("Graceful shutdown failed", "error", err)
 	}
 
