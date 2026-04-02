@@ -125,9 +125,9 @@ func updateConfigFromForm(cfg *internal.Config, form url.Values) (string, bool) 
 	cfg.Agents.TelemetryFrequency = telemetryFreq
 
 	// Agent Unresponsive Timer
-	offlineStr := strings.TrimSpace(form.Get("agents.unresponsive_timer"))
+	offlineStr := strings.TrimSpace(form.Get("agents.offline_timer"))
 	if offlineStr == "" {
-		return "Unresponsive Agent Timer is required.", false
+		return "Offline Agent Timer is required.", false
 	}
 
 	offline, err := strconv.Atoi(offlineStr)

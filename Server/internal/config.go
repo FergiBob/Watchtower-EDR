@@ -32,7 +32,7 @@ type Config struct {
 		CpeDB  string `yaml:"cpe_db_path"`
 	} `yaml:"database"`
 	Agents struct {
-		OfflineTimer       int    `yaml:"unresponsive_timer"`
+		OfflineTimer       int    `yaml:"offline_timer"`
 		TelemetryFrequency int    `yaml:"telemetry_freq"`
 		EnrollmentToken    string `yaml:"enrollment_token"`
 	} `yaml:"agents"`
