@@ -237,7 +237,6 @@ func SyncCPE(ctx context.Context, db *sql.DB, apiKey string) error {
 	return nil
 }
 
-// Starts a schedule to update the CPE database
 func StartCPEUpdater(ctx context.Context) {
 	db := CPE_Database
 	apikey := internal.AppConfig.NVD.APIKey
@@ -248,33 +247,123 @@ func StartCPEUpdater(ctx context.Context) {
 		return
 	}
 
-	// Run the initial catch-up immediately
 	go func() {
+		defer ticker.Stop()
+		slog.Info("CPE Updater background worker started.", "category", "NVD Database")
+
+		// Initial Sync
+		// This ensures the DB is seeded before the first 12hr loop
 		if err := SyncCPE(ctx, db, apikey); err != nil {
 			slog.Error("Initial CPE sync failed", "error", err, "category", "NVD Database")
 		}
-	}()
 
-	go func() {
-		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
 				slog.Info("Starting scheduled 12-hour CPE sync...", "category", "NVD Database")
 				if err := SyncCPE(ctx, db, apikey); err != nil {
-					slog.Error("CPE sync failed, scheduling retry in 1 hour", "error", err, "category", "NVD Database")
+					slog.Error("CPE sync failed, scheduling 1hr retry", "error", err, "category", "NVD Database")
 
-					// Schedule a one-time retry
-					time.AfterFunc(1*time.Hour, func() {
+					// Linear retry check
+					select {
+					case <-time.After(1 * time.Hour):
 						slog.Info("Retrying CPE sync...", "category", "NVD Database")
-						if err := SyncCPE(ctx, db, apikey); err != nil {
-							slog.Error("Retry failed. Will wait for next 12hr cycle.", "category", "NVD Database")
-						}
-					})
+						_ = SyncCPE(ctx, db, apikey) // Attempt retry
+					case <-ctx.Done():
+						return
+					}
 				}
 
 			case <-ctx.Done():
 				slog.Info("CPE Updater background worker stopped.", "category", "NVD Database")
+				return
+			}
+		}
+	}()
+}
+
+func MapCPEs() error {
+	// Get unmatched software from Main DB
+	rows, err := ReadQuery(Main_Database, `SELECT id, name, version, vendor FROM software WHERE cpe_uri IS NULL OR cpe_uri = ''`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id int
+		var name, version, vendor string
+		if err := rows.Scan(&id, &name, &version, &vendor); err != nil {
+			slog.Error("Failed to scan software row", "error", err)
+			continue
+		}
+
+		// Search the Dictionary DB
+		var cpeURI string
+		query := `
+            SELECT cpe_uri 
+            FROM cpe_dictionary 
+            WHERE (vendor LIKE ? OR ? LIKE '%' || vendor || '%')
+              AND (product LIKE ? OR ? LIKE '%' || product || '%')
+              AND version = ? 
+            LIMIT 1`
+
+		// Attempt to match the software information to a URI
+		args := []any{"%" + vendor + "%", vendor, "%" + name + "%", name, version}
+		err := QuerySingleRow(CPE_Database, query, args, &cpeURI)
+
+		if err != nil {
+			if err == sql.ErrNoRows {
+				continue // No match, move to next
+			}
+			slog.Error("Dictionary lookup error", "error", err)
+			continue
+		}
+
+		// Update the Main DB with the found URI using your WriteQuery wrapper
+		err = WriteQuery(Main_Database, "UPDATE software SET cpe_uri = ? WHERE id = ?", cpeURI, id)
+		if err != nil {
+			slog.Error("Failed to update software with CPE", "id", id, "error", err)
+		} else {
+			slog.Info("Successfully matched software", "name", name, "cpe", cpeURI)
+		}
+	}
+	return nil
+}
+
+func StartCPEMapper(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Minute)
+
+	go func() {
+		defer ticker.Stop()
+		slog.Info("CPE-Software Mapper background worker started.")
+
+		// 1. Run immediately on startup
+		if err := MapCPEs(); err != nil {
+			slog.Error("Initial CPE-Software map failed", "error", err)
+		}
+
+		for {
+			select {
+			case <-ticker.C:
+				slog.Info("Starting scheduled CPE-Software mapping...")
+				if err := MapCPEs(); err != nil {
+					slog.Error("CPE-Software mapping failed, scheduling retry", "error", err)
+
+					// uses After to wait for retry
+					select {
+					case <-time.After(1 * time.Minute):
+						slog.Info("Retrying CPE-Software mapping...")
+						if err := MapCPEs(); err != nil {
+							slog.Error("Retry failed. Waiting for next 5-minute cycle.")
+						}
+					case <-ctx.Done():
+						return
+					}
+				}
+
+			case <-ctx.Done():
+				slog.Info("Shutting down CPE-Software Mapper...")
 				return
 			}
 		}

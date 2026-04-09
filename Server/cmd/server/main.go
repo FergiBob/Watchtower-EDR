@@ -37,6 +37,7 @@ func main() {
 
 	// Start Background Tasks
 	data.StartCPEUpdater(ctx)
+	data.StartCPEMapper(ctx)
 
 	// Channel for OS signals (Physical CTRL+C) used to stop the server
 	stop := make(chan os.Signal, 1)

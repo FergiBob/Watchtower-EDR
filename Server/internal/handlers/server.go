@@ -70,6 +70,7 @@ func BuildServer() (*http.Server, error) {
 	mux.HandleFunc("POST /api/v1/agent/enroll", handleAgentEnrollment)
 	mux.HandleFunc("POST /api/v1/agent/heartbeat", HandleHeartbeat)
 	mux.HandleFunc("POST /api/v1/agent/telemetry/software", HandleSoftwareTelemetry)
+	mux.HandleFunc("POST /api/v1/agent/telemetry/os", HandleOSTelemetry)
 
 	// --- WEB UI PUBLIC ASSETS ---
 	fileServer := http.FileServer(http.Dir("./web/public"))
