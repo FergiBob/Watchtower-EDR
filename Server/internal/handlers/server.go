@@ -4,20 +4,21 @@ package handlers
 
 import (
 	"Watchtower_EDR/server/internal"
+	"Watchtower_EDR/server/internal/logs" // Updated to use the tiered logging system
 	"crypto/tls"
-	"log/slog"
 	"net/http"
 	"time"
 )
 
 var ShutdownChan = make(chan bool, 1)
 
-// Wraps a server mux in a recovery block to prevent fatal errors breaking server functionality
+// RecoveryMiddleware wraps a server mux in a recovery block to prevent fatal errors breaking server functionality
 func RecoveryMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if err := recover(); err != nil {
-				slog.Error("CRITICAL PANIC RECOVERED", "error", err, "url", r.URL.Path, "method", r.Method)
+				// Log as a System Error: This represents a bug or unexpected crash in the code logic
+				logs.Sys.Error("CRITICAL PANIC RECOVERED", "error", err, "url", r.URL.Path, "method", r.Method)
 				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 			}
 		}()
@@ -33,11 +34,14 @@ func HandleShutdown(w http.ResponseWriter, r *http.Request) {
 
 	username, err := GetUsernameFromToken(r)
 	if err != nil {
+		// Log as an Audit Warning: Someone attempted a shutdown without a valid session
+		logs.Audit.Warn("Unauthorized shutdown attempt", "remote_addr", r.RemoteAddr, "error", err)
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
-		slog.Error("Shutdown attempted. Failed to verify username", "error", err)
 		return
 	}
-	slog.Warn("CRITICAL: Server shutdown initiated via Web UI", "user", username)
+
+	// Log as a critical Audit event: Tracking which admin is taking the EDR offline
+	logs.Audit.Warn("CRITICAL: Server shutdown initiated via Web UI", "user", username)
 
 	// Give the user a response so they don't get a "Connection Reset" error
 	w.Header().Set("Content-Type", "text/plain")
@@ -50,16 +54,15 @@ func HandleShutdown(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
-// StartServer starts the TLS server on the defined port and initializes endpoints
-// Returns an error value through a channel
+// BuildServer starts the TLS server on the defined port and initializes endpoints
 func BuildServer() (*http.Server, error) {
 
 	// Ensure certificate and key are installed
 	err := SetupCertificates(internal.AppConfig.Server.FQDN)
 	if err != nil {
-		slog.Error("Failed to setup TLS certificates", "error", err, "action", "Exiting")
+		// System Error: The server cannot boot without its identity/encryption
+		logs.Sys.Error("Failed to setup TLS certificates", "error", err, "action", "Exiting")
 		return nil, err
-
 	}
 
 	// Create shared multiplexer
@@ -96,6 +99,8 @@ func BuildServer() (*http.Server, error) {
 			MinVersion: tls.VersionTLS12,
 		},
 	}
+
+	logs.Sys.Info("Watchtower Server configured", "port", "443", "tls", "1.2+")
 
 	return server, nil
 }

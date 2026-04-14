@@ -3,32 +3,30 @@ package data
 import (
 	"database/sql"
 	"fmt"
-	"log/slog"
 	"os"
 	"sync"
 
 	"Watchtower_EDR/server/internal"
+	"Watchtower_EDR/server/internal/logs"
 
 	_ "modernc.org/sqlite"
 )
 
-// Defines the two database connections as global pointers to a sql.DB object
+// Global database connections
 var Main_Database *sql.DB
 var User_Database *sql.DB
 var CPE_Database *sql.DB
+var CVE_Database *sql.DB
 
-// Takes a path to a database, initializes it and returns that connection as a pointer to the sql object
+// initDB initializes a database connection
 func initDB(path string) *sql.DB {
-	slog.Info("Initializing database connection", "path", path)
+	logs.DB.Info("Initializing database connection", "path", path)
 
-	// Build a DSN string for increases functionality
-	// _busy_timeout: prevents "database is locked" errors
-	// _journal_mode: WAL prevents readers and writers from blocking one another
 	dsn := fmt.Sprintf("%s?_busy_timeout=5000&_journal_mode=WAL", path)
 
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
-		slog.Error("Failed to open database file", "DB_path", path, "error", err, "action", "Exiting")
+		logs.DB.Error("Failed to open database file", "path", path, "error", err)
 		os.Exit(1)
 	}
 
@@ -36,269 +34,270 @@ func initDB(path string) *sql.DB {
 
 	err = db.Ping()
 	if err != nil {
-		slog.Error("Database connection test failed", "DB_path", path, "error", err, "action", "Exiting")
+		logs.DB.Error("Database connection test failed (Ping)", "path", path, "error", err)
 		os.Exit(1)
 	}
 
-	slog.Info("Database connection established successfully")
+	logs.DB.Info("Database connection established successfully", "path", path)
 	return db
 }
 
-// Helper function used to write data with parameters to a database
-// Takes database to connect to, the query string, and a variable list of parameters to apply to the query
-// Returns an error
+// WriteQuery executes a write operation inside a transaction
 func WriteQuery(db *sql.DB, query string, params ...interface{}) error {
-	// Begins transaction
 	tx, err := db.Begin()
 	if err != nil {
-		slog.Error("Failed to begin transaction", "error", err)
+		logs.DB.Error("Failed to begin write transaction", "error", err)
 		return err
 	}
 
-	// Rolls back to previous state in case of early exit
 	defer tx.Rollback()
 
-	// Executes query within transaction
 	if _, err := tx.Exec(query, params...); err != nil {
-		slog.Error("Failed to execute query", "error", err)
+		logs.DB.Error("Failed to execute write query", "query", query, "error", err)
 		return err
 	}
 
-	// Commit the transaction
 	if err := tx.Commit(); err != nil {
-		slog.Error("Failed to commit transaction", "error", err)
+		logs.DB.Error("Failed to commit write transaction", "error", err)
 		return err
 	}
 
 	return nil
 }
 
-// Helper function used to read data from a database
-// Takes database to connect to, the query string, and a variable list of parameters to apply to the query
-// Returns a rows pointer and an error value
+// ReadQuery executes a read operation and returns rows
 func ReadQuery(db *sql.DB, query string, params ...interface{}) (*sql.Rows, error) {
-	// Begin transaction
-	tx, err := db.Begin()
+	// Note: Standard reads often don't need a transaction,
+	// but kept here to match your original implementation logic.
+	rows, err := db.Query(query, params...)
 	if err != nil {
-		slog.Error("Failed to begin transaction", "error", err)
-		return nil, err
-	}
-
-	// Rolls back to previous state in case of early exit
-	defer tx.Rollback()
-
-	// Execute SELECT query
-	rows, err := tx.Query(query, params...)
-
-	// Commit to release transaction lock and apply any potential changes
-	if err = tx.Commit(); err != nil {
-		slog.Error("Failed to commit transaction", "error", err)
+		logs.DB.Error("Failed to execute read query", "query", query, "error", err)
 		return nil, err
 	}
 
 	return rows, nil
 }
 
-// QuerySingleRow simplifies read queries that only return one row by providing the items to scan results into in the arguments and returning the scanned values, rather than sql.Rows object that still has to be parsed
+// QuerySingleRow simplifies read queries that only return one row
 func QuerySingleRow(db *sql.DB, query string, args []any, dest ...any) error {
 	row := db.QueryRow(query, args...)
-	return row.Scan(dest...)
+	err := row.Scan(dest...)
+	if err != nil && err != sql.ErrNoRows {
+		logs.DB.Error("Failed to scan single row", "query", query, "error", err)
+	}
+	return err
 }
 
-// Builds the schemas for the two tables found in the NVD Dictionary
-// Used for initial creation or in the event of loss of database
-func setupNVDDictionary(db *sql.DB) {
-
+// setupCPEDictionary builds the schemas for the CPE database
+func setupCPEDictionary(db *sql.DB) {
 	query := `
-			CREATE TABLE IF NOT EXISTS cpe_dictionary (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				cpe_uri TEXT UNIQUE,
-				vendor TEXT,
-				product TEXT,
-				version TEXT,
-				deprecated INTEGER DEFAULT 0,
-				version_start_including TEXT,
-				version_start_excluding TEXT,
-				version_end_including TEXT,
-				version_end_excluding TEXT
-			);
+    CREATE TABLE IF NOT EXISTS cpe_dictionary (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cpe_uri TEXT UNIQUE,
+        vendor TEXT,
+        product TEXT,
+        version TEXT,
+        deprecated INTEGER DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_cpe_search ON cpe_dictionary(vendor, product, version);
+    CREATE TABLE IF NOT EXISTS sync_metadata (
+        key TEXT PRIMARY KEY,
+        last_sync_timestamp TEXT,
+        record_count INTEGER
+    );`
 
-			CREATE INDEX IF NOT EXISTS idx_vendor_product ON cpe_dictionary(vendor, product);
-
-			CREATE TABLE IF NOT EXISTS sync_metadata (
-				key TEXT PRIMARY KEY,
-				last_sync_timestamp TEXT,
-				record_count INTEGER
-			);
-		`
 	if err := WriteQuery(db, query); err != nil {
-		slog.Error("NVD Dictionary initialization failed...Exiting", "error", err, "action", "Exiting")
+		logs.Sys.Error("CPE Database schema initialization failed", "error", err)
 		os.Exit(1)
 	}
-
-	slog.Info("NVD Dictionary initialized successfully")
-
+	logs.DB.Info("CPE Dictionary schema verified/initialized")
 }
 
+// setupCVEDatabase builds the schemas for the CVE database
+func setupCVEDatabase(db *sql.DB) {
+	query := `
+    CREATE TABLE IF NOT EXISTS vulnerabilities (
+        cve_id TEXT PRIMARY KEY,
+        description TEXT,
+        severity TEXT,
+        cvss_score REAL,
+        published TEXT
+    );
+    CREATE TABLE IF NOT EXISTS software_vulnerabilities (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cve_id TEXT,
+        cpe_uri TEXT,
+        version_start TEXT,
+        version_end TEXT,
+        FOREIGN KEY(cve_id) REFERENCES vulnerabilities(cve_id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_sv_cpe_lookup ON software_vulnerabilities(cpe_uri);
+    CREATE INDEX IF NOT EXISTS idx_vuln_severity ON vulnerabilities(severity);
+    CREATE TABLE IF NOT EXISTS sync_metadata (
+        key TEXT PRIMARY KEY,
+        last_sync_timestamp TEXT,
+        record_count INTEGER
+    );`
+
+	if err := WriteQuery(db, query); err != nil {
+		logs.Sys.Error("Vulnerability Database schema initialization failed", "error", err)
+		os.Exit(1)
+	}
+	logs.DB.Info("Vulnerability Database schema verified/initialized")
+}
+
+// setupMainSQL builds the schemas for the primary EDR database
 func setupMainSQL(db *sql.DB) {
-	// Creates tables if they don't already exist: agents, software, agent_software, vulnerabilities, software_vulnerability
 	query := `
-		PRAGMA foreign_keys = ON;
-		CREATE TABLE IF NOT EXISTS agents (
-			agent_id TEXT PRIMARY KEY,
-			machine_id TEXT UNIQUE, 
-			hostname TEXT,
-			ip_address TEXT,
-			os TEXT,
-			os_version TEXT,
-			status TEXT DEFAULT 'active',
-			binary_version TEXT,
-			last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
-			first_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
-			description TEXT DEFAULT ''
-		);
+    PRAGMA foreign_keys = ON;
+    CREATE TABLE IF NOT EXISTS agents (
+        agent_id TEXT PRIMARY KEY,
+        machine_id TEXT UNIQUE, 
+        hostname TEXT,
+        ip_address TEXT,
+        os TEXT,
+        os_version TEXT,
+        status TEXT DEFAULT 'active',
+        binary_version TEXT,
+        last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+        first_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+        description TEXT DEFAULT ''
+    );
+    CREATE TABLE IF NOT EXISTS software (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cpe_uri TEXT UNIQUE, 
+        name TEXT,
+        version TEXT,
+        vendor TEXT
+    );
+    CREATE TABLE IF NOT EXISTS agent_software (
+        agent_id TEXT,
+        software_id INTEGER,
+        PRIMARY KEY (agent_id, software_id),
+        FOREIGN KEY (agent_id) REFERENCES agents(agent_id) ON DELETE CASCADE,
+        FOREIGN KEY (software_id) REFERENCES software(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS discovered_vulnerabilities (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        agent_id TEXT,
+        software_id INTEGER,
+        cve_id TEXT,
+        severity TEXT,        
+        cvss_score REAL,         
+        detected_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        status TEXT DEFAULT 'open',
+        FOREIGN KEY (agent_id) REFERENCES agents(agent_id) ON DELETE CASCADE,
+        FOREIGN KEY (software_id) REFERENCES software(id) ON DELETE CASCADE,
+        UNIQUE(agent_id, software_id, cve_id) 
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_hostname ON agents(hostname);
+    CREATE INDEX IF NOT EXISTS idx_sw_cpe ON software(cpe_uri);
+    CREATE INDEX IF NOT EXISTS idx_dv_agent ON discovered_vulnerabilities(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_dv_severity ON discovered_vulnerabilities(severity);
+    CREATE INDEX IF NOT EXISTS idx_dv_status ON discovered_vulnerabilities(status);
+    `
 
-		CREATE TABLE IF NOT EXISTS software (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			cpe_uri TEXT UNIQUE,
-			name TEXT,
-			version TEXT,
-			vendor TEXT
-    	);
-
-		CREATE TABLE IF NOT EXISTS agent_software (
-			agent_id TEXT,
-			software_id INTEGER,
-			PRIMARY KEY (agent_id, software_id),
-			FOREIGN KEY (agent_id) REFERENCES agents(agent_id) ON DELETE CASCADE,
-			FOREIGN KEY (software_id) REFERENCES software(id)
-		);
-
-		CREATE TABLE IF NOT EXISTS vulnerabilities (
-			cve_id TEXT PRIMARY KEY,
-			severity REAL,
-			description TEXT,
-			published_date TEXT
-		);
-
-		CREATE TABLE IF NOT EXISTS software_vulnerabilities (
-			software_id INTEGER,
-			cve_id TEXT,
-			discovered TIMSTAMP DEFAULT CURRENT_TIMESTAMP,
-			PRIMARY KEY (software_id, cve_id),
-			FOREIGN KEY (software_id) REFERENCES software(id) ON DELETE CASCADE,
-			FOREIGN KEY (cve_id) REFERENCES vulnerabilities(cve_id) ON DELETE CASCADE
-		);
-
-
-
-		-- Indexes
-		CREATE INDEX IF NOT EXISTS idx_agent_hostname ON agents(hostname);
-		CREATE INDEX IF NOT EXISTS idx_cat_cpe ON software(cpe_uri);
-		CREATE INDEX IF NOT EXISTS idx_vuln_severity ON vulnerabilities(severity);
-	`
-
-	// Call WriteQuery with parameters
-	if err := (WriteQuery(db, query)); err != nil {
-		slog.Error("Main database initialization failed", "error", err, "action", "Exiting")
+	if err := WriteQuery(db, query); err != nil {
+		logs.Sys.Error("Main database schema initialization failed", "error", err)
 		os.Exit(1)
 	}
-
+	logs.DB.Info("Main Database schema verified/initialized")
 }
 
-// Function for cleaning up any orphaned vulnerabilities or software in the main database
+// CleanupOrphans removes orphaned software records
 func CleanupOrphans() {
-	db := Main_Database
 	query := `
-		-- Delete software that no agent is currently using
-		DELETE FROM software_catalog 
-		WHERE id NOT IN (SELECT DISTINCT software_id FROM agent_software);
-
-		-- Delete vulnerability details that aren't linked to any software in our catalog
-		DELETE FROM vulnerability_cache 
-		WHERE cve_id NOT IN (SELECT DISTINCT cve_id FROM software_vulnerabilities);
-	`
-	WriteQuery(db, query)
+        DELETE FROM software 
+        WHERE id NOT IN (SELECT DISTINCT software_id FROM agent_software);
+    `
+	if err := WriteQuery(Main_Database, query); err != nil {
+		logs.DB.Error("Failed to cleanup orphaned database records", "error", err)
+	} else {
+		// Cleanup is an administrative action
+		logs.Audit.Info("Orphaned software records cleaned up successfully")
+	}
 }
 
-// Uses initDB to open connections to the internal database and the cpe dictionary database
-// As well as perform a schema check
+// StartDatabases opens connections to all configured databases
 func StartDatabases() {
-	// opens connections
+	logs.Sys.Info("Starting all database engines...")
 	Main_Database = initDB(internal.AppConfig.Database.MainDB)
 	User_Database = initDB(internal.AppConfig.Database.UserDB)
 	CPE_Database = initDB(internal.AppConfig.Database.CpeDB)
-
+	CVE_Database = initDB(internal.AppConfig.Database.CveDB)
 }
 
+// CloseDatabases ensures all connections are closed safely
 func CloseDatabases() {
-	slog.Info("Closing all database connections...")
-	if Main_Database != nil {
-		Main_Database.Close()
+	logs.Sys.Info("Closing all database connections...")
+	dbs := map[string]*sql.DB{
+		"Main": Main_Database,
+		"User": User_Database,
+		"CPE":  CPE_Database,
+		"CVE":  CVE_Database,
 	}
-	if User_Database != nil {
-		User_Database.Close()
+
+	for name, db := range dbs {
+		if db != nil {
+			if err := db.Close(); err != nil {
+				logs.DB.Error("Error closing database connection", "name", name, "error", err)
+			}
+		}
 	}
-	if CPE_Database != nil {
-		CPE_Database.Close()
-	}
-	CloseAllArchives() // Prevents any active archive file connections from leaking
+	CloseAllArchives()
 }
 
-// Ensures schemas and data are correct and up-to-date
+// VerifyDatabases ensures schemas are correct
 func VerifyDatabases() {
-	// Ensures tables exist, creates them if not
-	setupNVDDictionary(CPE_Database)
+	logs.Sys.Info("Verifying database schemas...")
+	setupCPEDictionary(CPE_Database)
+	setupCVEDatabase(CVE_Database)
 	setupMainSQL(Main_Database)
-
 }
 
 // -------------------- ARCHIVE HANDLING --------------------------
 
-// Map of all archive db connections open at any given time
 var ActiveArchives = make(map[string]*sql.DB)
-var archiveMutex sync.Mutex // Prevents crashes in the event of multiple processes attempting to access the same archive
+var archiveMutex sync.Mutex
 
-// Adds archive name to the list of active archives
 func RegisterArchive(name string, db *sql.DB) {
 	archiveMutex.Lock()
 	defer archiveMutex.Unlock()
 	ActiveArchives[name] = db
+	// Registering an archive is an Audit-level event
+	logs.Audit.Info("Database archive registered", "name", name)
 }
 
-// Closes an archive connection and removes it from the list of active connections
 func CloseAllArchives() {
 	archiveMutex.Lock()
 	defer archiveMutex.Unlock()
 
 	for name, db := range ActiveArchives {
-		slog.Info("Closing archive connection", "archive", name)
+		logs.DB.Info("Closing archive connection", "archive", name)
 		db.Close()
 		delete(ActiveArchives, name)
 	}
 }
 
-// Opens an archive connection and adds it to the list of active connections
 func OpenArchive(path string) (*sql.DB, error) {
 	archiveMutex.Lock()
 	defer archiveMutex.Unlock()
 
-	// Check if a connection already exists
 	if db, exists := ActiveArchives[path]; exists {
 		return db, nil
 	}
 
-	// Build Connection string
+	logs.DB.Info("Opening archive database", "path", path)
 	dsn := fmt.Sprintf("file:%s?mode=ro", path)
 
-	// Open connection
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
+		logs.DB.Error("Failed to open archive file", "path", path, "error", err)
 		return nil, err
 	}
 
-	// Test Connection
 	if err := db.Ping(); err != nil {
+		logs.DB.Error("Archive ping failed", "path", path, "error", err)
 		db.Close()
 		return nil, err
 	}

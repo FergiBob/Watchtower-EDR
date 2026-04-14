@@ -6,12 +6,12 @@ package handlers
 import (
 	"database/sql"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"time"
 
 	"Watchtower_EDR/server/internal"
 	"Watchtower_EDR/server/internal/data"
+	"Watchtower_EDR/server/internal/logs"
 
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
@@ -68,9 +68,9 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 	// Handles errors for password hash query involving the username
 	if err != nil {
 		if err == sql.ErrNoRows {
-			slog.Warn("Login failed: user not found", "username", username) //warning message for invalid usernames
+			logs.Audit.Warn("Login failed: user not found", "username", username) //warning message for invalid usernames
 		} else {
-			slog.Error("Database query error during login", "error", err)
+			logs.DB.Error("Database query error during login", "error", err)
 		}
 		http.Redirect(w, r, "/login?error=1", http.StatusSeeOther)
 		return
@@ -78,12 +78,12 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Verify password matches stored password hash
 	if !CheckPasswordHash(password, storedHash) {
-		slog.Warn("Login failed: incorrect password", "username", username)
+		logs.Audit.Warn("Login failed: incorrect password", "username", username)
 		http.Redirect(w, r, "/login?error=1", http.StatusSeeOther)
 		return
 	}
 
-	slog.Info("User logged in successfully", "username", username)
+	logs.Audit.Info("User logged in successfully", "username", username)
 
 	// Create JWT
 	expirationTime := time.Now().Add(24 * time.Hour) //sets token to automatically expire in 24 hours
@@ -97,8 +97,9 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	tokenString, err := token.SignedString(jwtKey)
 	if err != nil {
-		slog.Error("Failed to sign JWT", "error", err)
+		logs.Sys.Error("Failed to sign JWT", "error", err, "username", username)
 		http.Error(w, "Internal Server Error", 500)
+		return
 	}
 
 	// Set Cookie
@@ -127,7 +128,7 @@ func LogoutHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.SetCookie(w, cookie)
-	slog.Info("User logged out successfully", "username", user)
+	logs.Audit.Info("User logged out successfully", "username", user)
 
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
@@ -136,27 +137,31 @@ func LogoutHandler(w http.ResponseWriter, r *http.Request) {
 func GetUsernameFromToken(r *http.Request) (string, error) {
 	cookie, err := r.Cookie("session_token")
 	if err != nil {
-		// Log the lack of a cookie securely
-		slog.Info("No session cookie found")
+		// Securely log the absence of session
+		logs.Sys.Debug("No session cookie found", "remote_addr", r.RemoteAddr)
 		return "", err
 	}
 
 	token, err := jwt.Parse(cookie.Value, func(token *jwt.Token) (interface{}, error) {
-		return []byte("YOUR_SECRET_KEY"), nil
+		// Ensure secret key matches global variable
+		return jwtKey, nil
 	})
 
 	if err != nil || !token.Valid {
-		// Log the specific parsing error securely
-		slog.Warn("Failed to parse token", "error", err)
+		logs.Audit.Warn("Failed to parse or validate token", "error", err, "remote_addr", r.RemoteAddr)
 		return "", err
 	}
 
 	if claims, ok := token.Claims.(jwt.MapClaims); ok {
-		username := claims["username"].(string)
+		username, ok := claims["username"].(string)
+		if !ok {
+			logs.Sys.Error("Token claims missing username string")
+			return "", fmt.Errorf("invalid claims")
+		}
 		return username, nil
 	}
 
-	slog.Warn("Invalid token claims structure")
+	logs.Sys.Warn("Invalid token claims structure", "remote_addr", r.RemoteAddr)
 	return "", fmt.Errorf("invalid claims")
 }
 
@@ -168,9 +173,11 @@ func AuthMiddleware(next http.Handler) http.Handler {
 		//handles redirect to login if user not authenticated
 		if err != nil {
 			if err == http.ErrNoCookie {
+				// We don't log this at Audit level to avoid spamming logs for guests/bots
 				http.Redirect(w, r, "/login", http.StatusSeeOther)
 				return
 			}
+			logs.Sys.Warn("Bad request in auth middleware", "error", err)
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -182,8 +189,9 @@ func AuthMiddleware(next http.Handler) http.Handler {
 			return jwtKey, nil
 		})
 
-		//catch-all redirect
+		//catch-all redirect for expired or tampered tokens
 		if err != nil || !tkn.Valid {
+			logs.Audit.Warn("Auth middleware: invalid or expired token", "remote_addr", r.RemoteAddr)
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}

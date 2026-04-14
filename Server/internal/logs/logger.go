@@ -6,17 +6,28 @@ import (
 	"os"
 	"strings"
 
-	"gopkg.in/natefinch/lumberjack.v2" // Used to maintain a rolling file logger to conserve space and efficiency long-term
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
-// InitLogger() initializes the configuration to be used for slog for the purposes of logging.
-// It utilizes both a log file (watchtower.log) as well as the standard console logging for quick and easy debugging
+// Exported categorized loggers
+var (
+	Sys   *slog.Logger // System startup, config, and lifecycle
+	Auth  *slog.Logger // Authentication, JWT, and security audits
+	Audit *slog.Logger // Manual changes/Actions by users
+	Agent *slog.Logger // Agent enrollment and telemetry
+	Net   *slog.Logger // TLS, Certificates, and Server middleware
+	Web   *slog.Logger // UI rendering and dashboard data
+	DB    *slog.Logger // Database connections and queries
+	Sync  *slog.Logger // NVD API synchronization
+	Map   *slog.Logger // CVE/CPE correlation alerts
+)
+
 func InitLogger() {
 	file := &lumberjack.Logger{
-		Filename:   "./internal/logs/watchtower.log", // path to file
-		MaxSize:    50,                               // file size in MB
-		MaxBackups: 8,                                // maximum number of backups
-		Compress:   true,                             // compresses backups to zip file
+		Filename:   "./internal/logs/watchtower.log",
+		MaxSize:    50,
+		MaxBackups: 8,
+		Compress:   true,
 	}
 
 	multiWriter := io.MultiWriter(os.Stdout, file)
@@ -24,25 +35,26 @@ func InitLogger() {
 	handler := slog.NewTextHandler(multiWriter, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-			// Simplify Time: 2026-03-23 20:30:00
 			if a.Key == slog.TimeKey {
-				return slog.Attr{
-					Key:   "time",
-					Value: slog.StringValue(a.Value.Time().Format("2006-01-02 15:04:05")),
-				}
-			}
-			// uppercase level for readability
-			if a.Key == slog.LevelKey {
-				return slog.Attr{
-					Key:   "level",
-					Value: slog.StringValue(a.Value.String()),
-				}
+				return slog.Attr{Key: "time", Value: slog.StringValue(a.Value.Time().Format("2006-01-02 15:04:05"))}
 			}
 			return a
 		},
 	})
 
-	slog.SetDefault(slog.New(handler))
+	base := slog.New(handler)
+	slog.SetDefault(base)
+
+	// Initialize categories
+	Sys = base.With("type", "system")
+	Auth = base.With("type", "auth")
+	Audit = base.With("type", "audit")
+	Agent = base.With("type", "agent")
+	Net = base.With("type", "network")
+	Web = base.With("type", "web")
+	DB = base.With("type", "database")
+	Sync = base.With("type", "nvd_sync")
+	Map = base.With("type", "mapper")
 }
 
 func GetTailLogs(lineCount int) (string, error) {

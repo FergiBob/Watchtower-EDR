@@ -4,8 +4,9 @@ package internal
 
 import (
 	"fmt"
-	"log/slog"
 	"os"
+
+	"Watchtower_EDR/server/internal/logs" // Import the new logging package
 
 	"gopkg.in/yaml.v3"
 )
@@ -30,6 +31,7 @@ type Config struct {
 		MainDB string `yaml:"main_db_path"`
 		UserDB string `yaml:"user_db_path"`
 		CpeDB  string `yaml:"cpe_db_path"`
+		CveDB  string `yaml:"cve_db_path"`
 	} `yaml:"database"`
 	Agents struct {
 		OfflineTimer       int    `yaml:"offline_timer"`
@@ -40,40 +42,50 @@ type Config struct {
 
 var AppConfig Config
 
-// Writes config data to the config file (YAML)
+// SaveConfig writes config data to the config file (YAML)
 func SaveConfig(cfg Config) error {
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
-		return fmt.Errorf("yaml marhsal: %w", err)
+		logs.Sys.Error("Failed to marshal config for saving", "error", err)
+		return fmt.Errorf("yaml marshal: %w", err)
 	}
 
-	return os.WriteFile(configFile, data, 0644)
+	err = os.WriteFile(configFile, data, 0644)
+	if err != nil {
+		logs.Sys.Error("Failed to write config file to disk", "path", configFile, "error", err)
+		return err
+	}
+
+	logs.Sys.Info("Configuration saved successfully")
+	return nil
 }
 
-// Reads config data from the config file (YAML)
+// LoadConfig reads config data from the config file (YAML)
 func LoadConfig() {
-
 	// Check if file exists and creates it if not
 	if _, err := os.Stat(configFile); os.IsNotExist(err) {
-		slog.Info("Config file not found, creating default config.yaml")
-		createDefaultConfig(configFile) // writes a default configuration to the file
+		logs.Sys.Warn("Config file not found, creating default config.yaml", "path", configFile)
+		createDefaultConfig(configFile)
 	}
 
 	// Read the file
 	data, err := os.ReadFile(configFile)
 	if err != nil {
-		slog.Error("Failed to read config file", "error", err)
+		logs.Sys.Error("Failed to read config file", "path", configFile, "error", err)
 		return
 	}
 
-	// 3. Unmarshal (Parse) YAML into the struct
+	// Unmarshal (Parse) YAML into the struct
 	err = yaml.Unmarshal(data, &AppConfig)
 	if err != nil {
-		slog.Error("Failed to parse config file", "error", err)
+		logs.Sys.Error("Failed to parse config YAML", "path", configFile, "error", err)
+		return
 	}
+
+	logs.Sys.Info("Configuration loaded successfully", "path", configFile)
 }
 
-// used to populate a freshly created config.yaml with defualt configuration information
+// createDefaultConfig populates a freshly created config.yaml with default information
 func createDefaultConfig(path string) {
 	defaultCfg := Config{}
 	defaultCfg.NVD.APIKey = "YOUR_API_KEY_HERE"
@@ -85,10 +97,21 @@ func createDefaultConfig(path string) {
 	defaultCfg.Database.MainDB = "./internal/data/main.db"
 	defaultCfg.Database.UserDB = "./internal/data/users.db"
 	defaultCfg.Database.CpeDB = "./internal/data/cpe.db"
+	defaultCfg.Database.CveDB = "./internal/data/cve.db"
 	defaultCfg.Agents.OfflineTimer = 60
 	defaultCfg.Agents.TelemetryFrequency = 5
 	defaultCfg.Agents.EnrollmentToken = "WATCHTOWER_EDR_SECRET"
 
-	data, _ := yaml.Marshal(&defaultCfg)
-	os.WriteFile(path, data, 0644)
+	data, err := yaml.Marshal(&defaultCfg)
+	if err != nil {
+		logs.Sys.Error("Failed to marshal default configuration", "error", err)
+		return
+	}
+
+	err = os.WriteFile(path, data, 0644)
+	if err != nil {
+		logs.Sys.Error("Failed to create default config file", "path", path, "error", err)
+	} else {
+		logs.Sys.Info("Default configuration file created", "path", path)
+	}
 }

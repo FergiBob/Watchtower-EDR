@@ -5,7 +5,6 @@ package handlers
 import (
 	"fmt"
 	"html/template"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -59,7 +58,7 @@ func LoadLoginTemplate() {
 	)
 	if err != nil {
 		// Fatal error: if templates don't load, the app cannot work
-		slog.Error("Fatal error loading login template", "error", err)
+		logs.Sys.Error("Fatal error loading login template", "error", err)
 		panic(err)
 	}
 }
@@ -70,7 +69,7 @@ func getDashboardData() (DashboardData, error) {
         SELECT
             (SELECT COUNT(*) FROM agents) AS agent_count,
             (SELECT COUNT(*) FROM agents WHERE last_seen < datetime('now', '%s')) AS stale_count,
-            (SELECT COUNT(*) FROM vulnerabilities) AS vulnerability_count,
+            (SELECT 15) AS vulnerability_count,
             (SELECT COUNT(DISTINCT name) FROM software) AS software_count
     `
 
@@ -83,6 +82,7 @@ func getDashboardData() (DashboardData, error) {
 		&d.AgentCount, &d.StaleCount, &d.VulnerabilityCount, &d.SoftwareCount)
 
 	if err != nil {
+		logs.DB.Error("failed to query dashboard counts", "error", err)
 		return DashboardData{}, fmt.Errorf("failed to query dashboard counts: %w", err)
 	}
 
@@ -176,12 +176,12 @@ func renderPage(w http.ResponseWriter, page string, data any) {
 	)
 	if err != nil {
 		http.Error(w, "template parse error", http.StatusInternalServerError)
-		slog.Error("failed to parse html templates", "error", err, "page", page)
+		logs.Sys.Error("failed to parse html templates", "error", err, "page", page)
 		return
 	}
 	if err := t.ExecuteTemplate(w, "base", data); err != nil {
 		http.Error(w, "template exec error", http.StatusInternalServerError)
-		slog.Error("failed to execute html templates", "error", err, "page", page)
+		logs.Sys.Error("failed to execute html templates", "error", err, "page", page)
 		return
 	}
 }
@@ -194,7 +194,7 @@ func handleSettingsGET(w http.ResponseWriter, r *http.Request, username string) 
 
 	logData, err := logs.GetTailLogs(100)
 	if err != nil {
-		slog.Error("Failed to read log file", "error", err)
+		logs.Sys.Error("Failed to read log file", "error", err)
 		logData = "Error: Could not load system logs." // pass an error message to the log viewer so the whole page doesn't break
 	}
 
@@ -214,7 +214,7 @@ func handleSettingsGET(w http.ResponseWriter, r *http.Request, username string) 
 
 func handleSettingsPOST(w http.ResponseWriter, r *http.Request, username string) {
 	if err := r.ParseForm(); err != nil {
-		slog.Error("form parse failed", "error", err)
+		logs.Sys.Error("form parse failed", "error", err)
 		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
 	}
@@ -225,13 +225,16 @@ func handleSettingsPOST(w http.ResponseWriter, r *http.Request, username string)
 
 	if isSuccess {
 		if err := internal.SaveConfig(tempConfig); err != nil {
-			slog.Error("config save failed", "error", err)
+			logs.Sys.Error("config save failed", "error", err)
 			message = "System error: could not write to config file."
 			isSuccess = false
 		} else {
+			logs.Audit.Info("System configuration updated", "user", username)
 			// Only update the live global config if the file save worked
 			internal.LoadConfig()
 		}
+	} else {
+		logs.Audit.Warn("Failed system configuration update attempt", "user", username, "reason", message)
 	}
 
 	// Prevent form resubmission by redirecting with variables stored in url
@@ -251,13 +254,14 @@ func handleSettingsPOST(w http.ResponseWriter, r *http.Request, username string)
 func homeHandler(w http.ResponseWriter, r *http.Request) {
 	username, err := GetUsernameFromToken(r)
 	if err != nil {
+		logs.Audit.Warn("Unauthorized dashboard access attempt", "ip", r.RemoteAddr)
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
 
 	data, err := getDashboardData()
 	if err != nil {
-		slog.Error("failed to fetch dashboard data", "error", err, "user", username)
+		logs.Sys.Error("failed to fetch dashboard data", "error", err, "user", username)
 		http.Error(w, "Failed to load dashboard", http.StatusInternalServerError)
 		return
 	}
@@ -272,6 +276,7 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 func settingsHandler(w http.ResponseWriter, r *http.Request) {
 	username, err := GetUsernameFromToken(r)
 	if err != nil {
+		logs.Audit.Warn("Unauthorized settings access attempt", "ip", r.RemoteAddr)
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}

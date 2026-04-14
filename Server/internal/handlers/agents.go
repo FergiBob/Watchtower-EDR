@@ -2,11 +2,11 @@ package handlers
 
 import (
 	"encoding/json"
-	"log/slog"
 	"net/http"
 
 	"Watchtower_EDR/server/internal"
 	"Watchtower_EDR/server/internal/data"
+	"Watchtower_EDR/server/internal/logs" // Use the custom tiered logging package
 	"Watchtower_EDR/shared"
 
 	"github.com/google/uuid"
@@ -14,12 +14,12 @@ import (
 
 // BuildAgentInstaller builds the script used to install an agent on a system
 func BuildAgentInstaller() {
-	slog.Info("building agent installer script", "fqdn", internal.AppConfig.Server.FQDN)
+	logs.Sys.Info("building agent installer script", "fqdn", internal.AppConfig.Server.FQDN)
 }
 
 // --------------------------------------------------------------------------------------------
 //
-//                            HELPER FUNCTIONS FOR AGENT HANDLERS
+//                            HELPER FUNCTIONS FOR AGENT HANDLERS
 //
 // --------------------------------------------------------------------------------------------
 
@@ -56,6 +56,7 @@ func EnrollAgent(req shared.RegistrationRequest, remoteAddr string) (string, err
 	)
 
 	if err != nil {
+		logs.DB.Error("Failed to execute EnrollAgent query", "error", err, "machine_id", req.MachineID)
 		return "", err
 	}
 
@@ -72,6 +73,7 @@ func UpdateAgentData(agentID string, hostname string, remoteAddr string) (shared
 	queryStatus := `SELECT status FROM agents WHERE agent_id = ?`
 	err := data.QuerySingleRow(data.Main_Database, queryStatus, []any{agentID}, &resp.Status)
 	if err != nil {
+		logs.DB.Debug("Heartbeat attempted for unknown agent", "agent_id", agentID)
 		return resp, err // Agent likely doesn't exist
 	}
 
@@ -87,6 +89,9 @@ func UpdateAgentData(agentID string, hostname string, remoteAddr string) (shared
         WHERE agent_id = ?`
 
 	err = data.WriteQuery(data.Main_Database, queryUpdate, hostname, remoteAddr, agentID)
+	if err != nil {
+		logs.DB.Error("Failed to update agent metadata during heartbeat", "agent_id", agentID, "error", err)
+	}
 
 	return resp, err
 }
@@ -98,35 +103,44 @@ func UpdateAgentDescription(agentID string, description string) error {
         description = ?
     WHERE agent_id = ?`
 
-	return data.WriteQuery(data.Main_Database, query, description, agentID)
+	err := data.WriteQuery(data.Main_Database, query, description, agentID)
+	if err != nil {
+		logs.DB.Error("Failed to update agent description", "agent_id", agentID, "error", err)
+	}
+	return err
 }
 
 // RemoveAgent removes an agent from the database using a provided agentID.
 func RemoveAgent(agentID string) error {
-	slog.Warn("decommissioning agent", "agent_id", agentID)
+	logs.Audit.Warn("Agent decommissioning triggered", "agent_id", agentID)
 
 	query := `UPDATE agents SET status = 'decommissioned', last_seen = CURRENT_TIMESTAMP WHERE agent_id = ?`
 
-	return data.WriteQuery(data.Main_Database, query, agentID)
+	err := data.WriteQuery(data.Main_Database, query, agentID)
+	if err != nil {
+		logs.DB.Error("Failed to mark agent as decommissioned", "agent_id", agentID, "error", err)
+	}
+	return err
 }
 
 // --------------------------------------------------------------------------------------------
 //
-//	AGENT HANDLERS
+//  AGENT HANDLERS
 //
 // --------------------------------------------------------------------------------------------
 
-// Parses and handles an agent enrollment request
+// handleAgentEnrollment parses and handles an agent enrollment request
 func handleAgentEnrollment(w http.ResponseWriter, r *http.Request) {
 	var req shared.RegistrationRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		logs.Sys.Warn("Failed to decode agent enrollment request", "remote_addr", r.RemoteAddr, "error", err)
 		http.Error(w, "Invalid data", http.StatusBadRequest)
 		return
 	}
 
 	// Verify the enrollment token matches the one in the server config
 	if req.Token != internal.AppConfig.Agents.EnrollmentToken {
-		slog.Warn("Unauthorized enrollment attempt", "ip", r.RemoteAddr, "hostname", req.Hostname)
+		logs.Audit.Warn("Unauthorized enrollment attempt", "ip", r.RemoteAddr, "hostname", req.Hostname)
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
@@ -134,28 +148,26 @@ func handleAgentEnrollment(w http.ResponseWriter, r *http.Request) {
 	// Write to database
 	agentID, err := EnrollAgent(req, r.RemoteAddr)
 	if err != nil {
-		slog.Error("Failed to save agent", "error", err)
+		logs.DB.Error("Failed to enroll agent", "hostname", req.Hostname, "error", err)
 		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
 
-	slog.Info("Agent enrolled successfully", "agent_id", agentID)
+	logs.Audit.Info("Agent enrolled successfully", "agent_id", agentID, "hostname", req.Hostname, "ip", r.RemoteAddr)
 
 	// Respond with the new AgentID
-	// The agent MUST save this ID and use it for all future telemetry
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{"agent_id": agentID})
 }
 
-// Handles updating agent data and replying with any server-side changes to the agent
-// Response to agent's heartbeat (ping)
+// HandleHeartbeat handles updating agent data and replying with server-side changes
 func HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	var env shared.Envelope
 
 	// Decode the standard Envelope
 	if err := json.NewDecoder(r.Body).Decode(&env); err != nil {
-		slog.Warn("failed to decode heartbeat envelope", "remote_addr", r.RemoteAddr, "error", err)
+		logs.Sys.Warn("Failed to decode heartbeat envelope", "remote_addr", r.RemoteAddr, "error", err)
 		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
 	}
@@ -163,7 +175,7 @@ func HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	// Decode the HeartbeatData from the Payload
 	var hbData shared.HeartbeatData
 	if err := json.Unmarshal(env.Payload, &hbData); err != nil {
-		slog.Warn("failed to decode heartbeat payload", "agent_id", env.AgentID, "error", err)
+		logs.Sys.Warn("Failed to decode heartbeat payload", "agent_id", env.AgentID, "error", err)
 		http.Error(w, "Invalid Payload", http.StatusBadRequest)
 		return
 	}
@@ -171,7 +183,7 @@ func HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	// Update database using the received envelope
 	resp, err := UpdateAgentData(env.AgentID, hbData.Hostname, r.RemoteAddr)
 	if err != nil {
-		slog.Error("Heartbeat update failed", "agent_id", env.AgentID, "error", err)
+		logs.DB.Warn("Heartbeat update failed (Agent likely not enrolled)", "agent_id", env.AgentID, "error", err)
 		http.Error(w, "Agent not found", http.StatusNotFound)
 		return
 	}
@@ -179,31 +191,31 @@ func HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	// Send back the configuration response
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		slog.Error("Failed to encode response", "agent_id", env.AgentID, "error", err)
+		logs.Sys.Error("Failed to encode heartbeat response", "agent_id", env.AgentID, "error", err)
 	}
 }
 
-// Recieves Client software payload and updates agent information related to software installations
+// HandleSoftwareTelemetry receives Client software payload and updates inventory
 func HandleSoftwareTelemetry(w http.ResponseWriter, r *http.Request) {
 	var env shared.Envelope
 	db := data.Main_Database
 
 	if err := json.NewDecoder(r.Body).Decode(&env); err != nil {
-		slog.Warn("Failed to decode telemetry envelope", "error", err)
+		logs.Sys.Warn("Failed to decode software telemetry envelope", "remote_addr", r.RemoteAddr, "error", err)
 		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
 	}
 
 	var softwareList []shared.Software
 	if err := json.Unmarshal(env.Payload, &softwareList); err != nil {
-		slog.Warn("Failed to decode software payload", "agent_id", env.AgentID, "error", err)
+		logs.Sys.Warn("Failed to decode software payload", "agent_id", env.AgentID, "error", err)
 		http.Error(w, "Invalid Payload", http.StatusBadRequest)
 		return
 	}
 
 	tx, err := db.Begin()
 	if err != nil {
-		slog.Error("Transaction start failed", "error", err)
+		logs.DB.Error("Software telemetry transaction start failed", "error", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
@@ -215,19 +227,18 @@ func HandleSoftwareTelemetry(w http.ResponseWriter, r *http.Request) {
 	// Clear this agent's inventory links
 	_, err = tx.Exec("DELETE FROM agent_software WHERE agent_id = ?", env.AgentID)
 	if err != nil {
-		slog.Error("Failed to clear agent links", "agent_id", env.AgentID, "error", err)
+		logs.DB.Error("Failed to clear agent software links", "agent_id", env.AgentID, "error", err)
 		return
 	}
 
 	// Prepare the "Get or Create" statement for the software dictionary
-	// Uses UNIQUE constraint to prevent duplicates
 	softStmt, err := tx.Prepare(`
         INSERT INTO software (name, version, vendor) 
         VALUES (?, ?, ?)
         ON CONFLICT(name, version, vendor) DO UPDATE SET name=excluded.name
         RETURNING id`)
 	if err != nil {
-		slog.Error("Failed to prepare softStmt", "error", err)
+		logs.DB.Error("Failed to prepare software dictionary statement", "error", err)
 		return
 	}
 	defer softStmt.Close()
@@ -237,7 +248,7 @@ func HandleSoftwareTelemetry(w http.ResponseWriter, r *http.Request) {
         INSERT INTO agent_software (agent_id, software_id, install_date) 
         VALUES (?, ?, ?)`)
 	if err != nil {
-		slog.Error("Failed to prepare linkStmt", "error", err)
+		logs.DB.Error("Failed to prepare link statement", "error", err)
 		return
 	}
 	defer linkStmt.Close()
@@ -245,31 +256,29 @@ func HandleSoftwareTelemetry(w http.ResponseWriter, r *http.Request) {
 	// Process loop
 	for _, s := range softwareList {
 		var softwareID int64
-
-		// This gets the ID whether it's a new insert or an existing record
 		err := softStmt.QueryRow(s.Name, s.Version, s.Manufacturer).Scan(&softwareID)
 		if err != nil {
-			slog.Warn("Could not resolve software ID", "name", s.Name, "error", err)
+			logs.DB.Warn("Could not resolve software ID", "name", s.Name, "error", err)
 			continue
 		}
 
 		// Link the agent to the software ID
 		_, err = linkStmt.Exec(env.AgentID, softwareID, s.Date)
 		if err != nil {
-			slog.Warn("Link failed", "agent", env.AgentID, "soft_id", softwareID, "error", err)
+			logs.DB.Warn("Software linking failed", "agent", env.AgentID, "soft_id", softwareID, "error", err)
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		slog.Error("Commit failed", "error", err)
+		logs.DB.Error("Software telemetry commit failed", "agent_id", env.AgentID, "error", err)
 		http.Error(w, "Database Error", http.StatusInternalServerError)
 		return
 	}
 
-	slog.Info("Relational sync complete", "agent", env.AgentID, "items", len(softwareList))
+	logs.Sys.Debug("Software relational sync complete", "agent", env.AgentID, "items", len(softwareList))
 	w.WriteHeader(http.StatusOK)
 }
 
 func HandleOSTelemetry(w http.ResponseWriter, r *http.Request) {
-
+	// Logic to be implemented
 }
