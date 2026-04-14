@@ -69,7 +69,7 @@ func getDashboardData() (DashboardData, error) {
         SELECT
             (SELECT COUNT(*) FROM agents) AS agent_count,
             (SELECT COUNT(*) FROM agents WHERE last_seen < datetime('now', '%s')) AS stale_count,
-            (SELECT 15) AS vulnerability_count,
+            (SELECT COUNT(*) FROM discovered_vulnerabilities) AS vulnerability_count,
             (SELECT COUNT(DISTINCT name) FROM software) AS software_count
     `
 

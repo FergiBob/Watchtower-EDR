@@ -1,5 +1,4 @@
-// provides functions to handle cloning cpe data and querying cve entries in NIST NVD
-
+// package data handles cloning cpe data and querying cve entries in NIST NVD
 package data
 
 import (
@@ -14,17 +13,16 @@ import (
 	"time"
 
 	"Watchtower_EDR/server/internal"
-	"Watchtower_EDR/server/internal/logs" // Import the tiered logging package
+	"Watchtower_EDR/server/internal/logs"
 )
 
-// FormatNVDTime converts a Go time object to the specific string
-// format the NVD API requires (ISO 8601 with milliseconds).
+// FormatNVDTime converts a Go time object to the specific string format the NVD API requires.
 func FormatNVDTime(t time.Time) string {
 	return t.UTC().Format("2006-01-02T15:04:05.000")
 }
 
 // ------------------------------------------------------------------------------------------------------------
-//                                           CPE SPECIFIC FUNCTIONS
+//                                           CPE SPECIFIC FUNCTIONS
 // ------------------------------------------------------------------------------------------------------------
 
 type CPEResponse struct {
@@ -68,8 +66,6 @@ func getCPEStartTime(db *sql.DB) string {
 		logs.DB.Error("Database error checking CPE sync metadata", "error", err)
 		return FormatNVDTime(time.Now().AddDate(0, 0, -120))
 	}
-
-	logs.Sys.Info("Resuming CPE sync from last recorded timestamp", "timestamp", lastSync)
 	return lastSync
 }
 
@@ -82,14 +78,10 @@ func processBatch(db *sql.DB, products []CPEProduct) {
 	defer tx.Rollback()
 
 	stmt, err := tx.Prepare(`
-        INSERT INTO cpe_dictionary (
-            cpe_uri, vendor, product, version, deprecated
-        ) VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(cpe_uri) DO UPDATE SET
-            vendor=excluded.vendor,
-            product=excluded.product,
-            version=excluded.version,
-            deprecated=excluded.deprecated`)
+		INSERT INTO cpe_dictionary (cpe_uri, vendor, product, version, deprecated) 
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(cpe_uri) DO UPDATE SET
+			vendor=excluded.vendor, product=excluded.product, version=excluded.version, deprecated=excluded.deprecated`)
 	if err != nil {
 		logs.DB.Error("Failed to prepare CPE batch statement", "error", err)
 		return
@@ -101,46 +93,14 @@ func processBatch(db *sql.DB, products []CPEProduct) {
 		if len(parts) < 6 {
 			continue
 		}
-
-		_, err := stmt.Exec(
-			p.CPE.CpeName,
-			parts[3], // vendor
-			parts[4], // product
-			parts[5], // version
-			p.CPE.Deprecated,
-		)
-		if err != nil {
-			logs.DB.Warn("Failed to insert CPE record", "uri", p.CPE.CpeName, "error", err)
-		}
+		_, _ = stmt.Exec(p.CPE.CpeName, parts[3], parts[4], parts[5], p.CPE.Deprecated)
 	}
-
-	if err := tx.Commit(); err != nil {
-		logs.DB.Error("Failed to commit CPE batch transaction", "error", err)
-	} else {
-		logs.Sys.Debug("Successfully processed CPE batch", "count", len(products))
-	}
-}
-
-func updateCPESyncMetadata(db *sql.DB, timestamp string, count int) {
-	_, err := db.Exec(`
-        INSERT INTO sync_metadata (key, last_sync_timestamp, record_count) 
-        VALUES ('nvd_cpe', ?, ?)
-        ON CONFLICT(key) DO UPDATE SET 
-            last_sync_timestamp = excluded.last_sync_timestamp,
-            record_count = excluded.record_count`,
-		timestamp, count)
-	if err != nil {
-		logs.DB.Error("Failed to update CPE sync metadata", "error", err)
-	}
+	tx.Commit()
 }
 
 func SyncCPE(ctx context.Context, db *sql.DB, apiKey string) error {
 	lastSyncStr := getCPEStartTime(db)
-	lastSyncTime, err := time.Parse("2006-01-02T15:04:05.000", lastSyncStr)
-	if err != nil {
-		logs.Sys.Error("Failed to parse last CPE sync time", "error", err)
-		lastSyncTime = time.Now().AddDate(0, 0, -120)
-	}
+	lastSyncTime, _ := time.Parse("2006-01-02T15:04:05.000", lastSyncStr)
 
 	now := time.Now()
 	for lastSyncTime.Before(now) {
@@ -148,19 +108,16 @@ func SyncCPE(ctx context.Context, db *sql.DB, apiKey string) error {
 		if windowEnd.After(now) {
 			windowEnd = now
 		}
-
 		if !lastSyncTime.Before(windowEnd) {
 			break
 		}
 
-		logs.Sys.Info("Syncing CPE 120-day window", "start", FormatNVDTime(lastSyncTime), "end", FormatNVDTime(windowEnd))
 		startIndex := 0
 		resultsPerPage := 5000
-
 		for {
 			select {
 			case <-ctx.Done():
-				return fmt.Errorf("sync interrupted by shutdown")
+				return fmt.Errorf("sync interrupted")
 			default:
 			}
 
@@ -169,53 +126,36 @@ func SyncCPE(ctx context.Context, db *sql.DB, apiKey string) error {
 			params.Add("startIndex", strconv.Itoa(startIndex))
 			params.Add("lastModStartDate", FormatNVDTime(lastSyncTime))
 			params.Add("lastModEndDate", FormatNVDTime(windowEnd))
-			fullURL := internal.AppConfig.NVD.CpeURL + "?" + params.Encode()
 
-			req, _ := http.NewRequestWithContext(ctx, "GET", fullURL, nil)
+			req, _ := http.NewRequestWithContext(ctx, "GET", internal.AppConfig.NVD.CpeURL+"?"+params.Encode(), nil)
 			req.Header.Set("apiKey", apiKey)
-			req.Header.Set("User-Agent", "WatchtowerEDR-CPE-Updater")
-
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
-				return fmt.Errorf("network error during CPE sync: %w", err)
-			}
-
-			if resp.StatusCode == 429 || resp.StatusCode == 503 {
-				resp.Body.Close()
-				logs.Sys.Warn("NVD API is throttled or down. Sleeping 30s...", "status", resp.Status)
-				time.Sleep(30 * time.Second)
-				return fmt.Errorf("server busy: %s", resp.Status)
+				return err
 			}
 
 			if resp.StatusCode != http.StatusOK {
 				resp.Body.Close()
-				return fmt.Errorf("NVD API returned error: %s", resp.Status)
+				return fmt.Errorf("NVD API error: %s", resp.Status)
 			}
 
 			var data CPEResponse
-			if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-				resp.Body.Close()
-				return fmt.Errorf("failed to decode NVD JSON: %w", err)
-			}
+			json.NewDecoder(resp.Body).Decode(&data)
 			resp.Body.Close()
 
 			if len(data.Products) > 0 {
 				processBatch(db, data.Products)
 			}
 
-			logs.Sys.Debug("CPE Progress", "total", data.TotalResults, "index", startIndex)
 			startIndex += resultsPerPage
 			if startIndex >= data.TotalResults {
 				break
 			}
 			time.Sleep(1 * time.Second)
 		}
-
-		updateCPESyncMetadata(db, FormatNVDTime(windowEnd), 0)
+		db.Exec("INSERT INTO sync_metadata (key, last_sync_timestamp) VALUES ('nvd_cpe', ?) ON CONFLICT(key) DO UPDATE SET last_sync_timestamp=excluded.last_sync_timestamp", FormatNVDTime(windowEnd))
 		lastSyncTime = windowEnd
-		time.Sleep(2 * time.Second)
 	}
-	logs.Sys.Info("CPE Dictionary is fully up to date")
 	return nil
 }
 
@@ -264,53 +204,33 @@ func StartCPEUpdater(ctx context.Context) {
 	}()
 }
 
+// MapCPEs correlates both Software and Operating Systems to CPE URIs
 func MapCPEs() error {
-	rows, err := ReadQuery(Main_Database, `
-        SELECT id, name, version, vendor 
-        FROM software 
-        WHERE cpe_uri IS NULL OR cpe_uri = ''`)
-	if err != nil {
-		logs.DB.Error("failed to fetch unmatched software", "error", err)
-		return fmt.Errorf("failed to fetch unmatched software: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
+	// 1. Map Software
+	swRows, _ := ReadQuery(Main_Database, `SELECT id, name, version, vendor FROM software WHERE cpe_uri IS NULL OR cpe_uri = ''`)
+	defer swRows.Close()
+	for swRows.Next() {
 		var id int
 		var name, version, vendor string
-		if err := rows.Scan(&id, &name, &version, &vendor); err != nil {
-			logs.DB.Error("Failed to scan software row for CPE mapping", "error", err)
-			continue
-		}
-
-		name = strings.TrimSpace(name)
-		vendor = strings.TrimSpace(vendor)
+		swRows.Scan(&id, &name, &version, &vendor)
 		var cpeURI string
-
-		// TIER 1: EXACT MATCH
-		queryExact := `SELECT cpe_uri FROM cpe_dictionary WHERE (vendor LIKE ? OR ? LIKE '%' || vendor || '%') AND (product LIKE ? OR ? LIKE '%' || product || '%') AND version = ? ORDER BY deprecated ASC LIMIT 1`
-		argsExact := []any{"%" + vendor + "%", vendor, "%" + name + "%", name, version}
-		err := QuerySingleRow(CPE_Database, queryExact, argsExact, &cpeURI)
-
-		// TIER 2: WILDCARD
-		if err != nil && err == sql.ErrNoRows {
-			queryWildcard := `SELECT cpe_uri FROM cpe_dictionary WHERE (vendor LIKE ? OR ? LIKE '%' || vendor || '%') AND (product LIKE ? OR ? LIKE '%' || product || '%') AND version = '*' ORDER BY deprecated ASC LIMIT 1`
-			argsWildcard := []any{"%" + vendor + "%", vendor, "%" + name + "%", name}
-			err = QuerySingleRow(CPE_Database, queryWildcard, argsWildcard, &cpeURI)
+		query := `SELECT cpe_uri FROM cpe_dictionary WHERE (vendor LIKE ? OR ? LIKE '%' || vendor || '%') AND (product LIKE ? OR ? LIKE '%' || product || '%') AND (version = ? OR version = '*') ORDER BY version DESC, deprecated ASC LIMIT 1`
+		if err := QuerySingleRow(CPE_Database, query, []any{"%" + vendor + "%", vendor, "%" + name + "%", name, version}, &cpeURI); err == nil {
+			WriteQuery(Main_Database, "UPDATE software SET cpe_uri = ? WHERE id = ?", cpeURI, id)
 		}
+	}
 
-		switch err {
-		case nil:
-			err = WriteQuery(Main_Database, "UPDATE software SET cpe_uri = ? WHERE id = ?", cpeURI, id)
-			if err != nil {
-				logs.DB.Error("Failed to update software table with CPE", "id", id, "error", err)
-			} else {
-				logs.Sys.Debug("Successfully matched software to CPE", "name", name, "cpe", cpeURI)
-			}
-		case sql.ErrNoRows:
-			// No match found
-		default:
-			logs.DB.Error("Database error during CPE mapping lookup", "error", err)
+	// 2. Map Operating Systems (New OS Logic)
+	agentRows, _ := ReadQuery(Main_Database, `SELECT agent_id, os, os_version FROM agents WHERE os_cpe_uri IS NULL OR os_cpe_uri = ''`)
+	defer agentRows.Close()
+	for agentRows.Next() {
+		var aid, osName, osVer string
+		agentRows.Scan(&aid, &osName, &osVer)
+		var cpeURI string
+		// Look specifically for 'o' (Operating System) part CPEs
+		query := `SELECT cpe_uri FROM cpe_dictionary WHERE cpe_uri LIKE 'cpe:2.3:o:%' AND (product LIKE ? OR ? LIKE '%' || product || '%') AND (version = ? OR version = '*') ORDER BY version DESC LIMIT 1`
+		if err := QuerySingleRow(CPE_Database, query, []any{"%" + osName + "%", osName, osVer}, &cpeURI); err == nil {
+			WriteQuery(Main_Database, "UPDATE agents SET os_cpe_uri = ? WHERE agent_id = ?", cpeURI, aid)
 		}
 	}
 	return nil
@@ -341,7 +261,7 @@ func StartCPEMapper(ctx context.Context) {
 }
 
 // ------------------------------------------------------------------------------------------------------------
-//                                           CVE SPECIFIC FUNCTIONS
+//                                           CVE SPECIFIC FUNCTIONS
 // ------------------------------------------------------------------------------------------------------------
 
 type NVDCVEResponse struct {
@@ -407,59 +327,11 @@ func getCVEStartTime(db *sql.DB) string {
 	return lastSync
 }
 
-func processCVEBatch(db *sql.DB, items []CVEItem) {
-	tx, err := db.Begin()
-	if err != nil {
-		logs.DB.Error("Failed to begin CVE transaction", "error", err)
-		return
-	}
-	defer tx.Rollback()
-
-	for _, item := range items {
-		cve := item.CVE
-		var score float64
-		var severity string
-		if len(cve.Metrics.CvssMetricV31) > 0 {
-			score = cve.Metrics.CvssMetricV31[0].CvssData.BaseScore
-			severity = cve.Metrics.CvssMetricV31[0].CvssData.BaseSeverity
-		}
-
-		_, err = tx.Exec(`
-            INSERT INTO vulnerabilities (cve_id, description, severity, cvss_score, published) 
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(cve_id) DO UPDATE SET 
-                description=excluded.description, 
-                severity=excluded.severity, 
-                cvss_score=excluded.cvss_score`,
-			cve.ID, cve.Descriptions[0].Value, severity, score, cve.Published)
-
-		if err != nil {
-			logs.DB.Warn("Failed to insert CVE record", "id", cve.ID, "error", err)
-			continue
-		}
-
-		for _, config := range cve.Configurations {
-			for _, node := range config.Nodes {
-				for _, match := range node.CpeMatches {
-					_, _ = tx.Exec(`
-                        INSERT INTO software_vulnerabilities (cve_id, cpe_uri, version_start, version_end) 
-                        VALUES (?, ?, ?, ?)`,
-						cve.ID, match.Criteria, match.VersionStartIncluding, match.VersionEndIncluding)
-				}
-			}
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		logs.DB.Error("Failed to commit CVE batch transaction", "error", err)
-	}
-}
-
 func SyncCVE(ctx context.Context, db *sql.DB, apiKey string) error {
 	lastSyncStr := getCVEStartTime(db)
 	lastSyncTime, _ := time.Parse("2006-01-02T15:04:05.000", lastSyncStr)
-
 	now := time.Now()
+
 	for lastSyncTime.Before(now) {
 		windowEnd := lastSyncTime.AddDate(0, 0, 120)
 		if windowEnd.After(now) {
@@ -469,14 +341,12 @@ func SyncCVE(ctx context.Context, db *sql.DB, apiKey string) error {
 			break
 		}
 
-		logs.Sys.Info("Syncing CVE 120-day window", "start", FormatNVDTime(lastSyncTime), "end", FormatNVDTime(windowEnd))
 		startIndex := 0
 		resultsPerPage := 2000
-
 		for {
 			select {
 			case <-ctx.Done():
-				return fmt.Errorf("CVE sync interrupted")
+				return fmt.Errorf("interrupted")
 			default:
 			}
 
@@ -486,32 +356,15 @@ func SyncCVE(ctx context.Context, db *sql.DB, apiKey string) error {
 			params.Add("lastModStartDate", FormatNVDTime(lastSyncTime))
 			params.Add("lastModEndDate", FormatNVDTime(windowEnd))
 
-			fullURL := internal.AppConfig.NVD.CveURL + "?" + params.Encode()
-			req, _ := http.NewRequestWithContext(ctx, "GET", fullURL, nil)
+			req, _ := http.NewRequestWithContext(ctx, "GET", internal.AppConfig.NVD.CveURL+"?"+params.Encode(), nil)
 			req.Header.Set("apiKey", apiKey)
-
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
 				return err
 			}
 
-			if resp.StatusCode == 429 || resp.StatusCode == 503 {
-				resp.Body.Close()
-				logs.Sys.Warn("NVD API throttled during CVE sync. Sleeping 30s...")
-				time.Sleep(30 * time.Second)
-				return fmt.Errorf("server busy: %s", resp.Status)
-			}
-
-			if resp.StatusCode != http.StatusOK {
-				resp.Body.Close()
-				return fmt.Errorf("NVD CVE API error: %s", resp.Status)
-			}
-
 			var data NVDCVEResponse
-			if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-				resp.Body.Close()
-				return err
-			}
+			json.NewDecoder(resp.Body).Decode(&data)
 			resp.Body.Close()
 
 			if len(data.Vulnerabilities) > 0 {
@@ -524,14 +377,34 @@ func SyncCVE(ctx context.Context, db *sql.DB, apiKey string) error {
 			}
 			time.Sleep(6 * time.Second)
 		}
-
-		_, err := db.Exec("INSERT INTO sync_metadata (key, last_sync_timestamp) VALUES ('nvd_cve', ?) ON CONFLICT(key) DO UPDATE SET last_sync_timestamp=excluded.last_sync_timestamp", FormatNVDTime(windowEnd))
-		if err != nil {
-			logs.DB.Error("Failed to update CVE sync metadata", "error", err)
-		}
+		db.Exec("INSERT INTO sync_metadata (key, last_sync_timestamp) VALUES ('nvd_cve', ?) ON CONFLICT(key) DO UPDATE SET last_sync_timestamp=excluded.last_sync_timestamp", FormatNVDTime(windowEnd))
 		lastSyncTime = windowEnd
 	}
 	return nil
+}
+
+func processCVEBatch(db *sql.DB, items []CVEItem) {
+	tx, _ := db.Begin()
+	defer tx.Rollback()
+	for _, item := range items {
+		cve := item.CVE
+		var score float64
+		var severity string
+		if len(cve.Metrics.CvssMetricV31) > 0 {
+			score = cve.Metrics.CvssMetricV31[0].CvssData.BaseScore
+			severity = cve.Metrics.CvssMetricV31[0].CvssData.BaseSeverity
+		}
+		_, _ = tx.Exec(`INSERT INTO vulnerabilities (cve_id, description, severity, cvss_score, published) VALUES (?, ?, ?, ?, ?) ON CONFLICT(cve_id) DO UPDATE SET cvss_score=excluded.cvss_score`, cve.ID, cve.Descriptions[0].Value, severity, score, cve.Published)
+
+		for _, config := range cve.Configurations {
+			for _, node := range config.Nodes {
+				for _, match := range node.CpeMatches {
+					_, _ = tx.Exec(`INSERT INTO software_vulnerabilities (cve_id, cpe_uri, version_start, version_end) VALUES (?, ?, ?, ?)`, cve.ID, match.Criteria, match.VersionStartIncluding, match.VersionEndIncluding)
+				}
+			}
+		}
+	}
+	tx.Commit()
 }
 
 func StartCVEUpdater(ctx context.Context) {
@@ -601,91 +474,95 @@ func versionCompare(v1, v2 string) int {
 	return 0
 }
 
+func isVulnerable(swVersion string, vStart, vEnd sql.NullString) bool {
+	if !vStart.Valid && !vEnd.Valid {
+		return true
+	}
+	inStartRange := !vStart.Valid || versionCompare(swVersion, vStart.String) >= 0
+	inEndRange := !vEnd.Valid || versionCompare(swVersion, vEnd.String) < 0
+	return inStartRange && inEndRange
+}
+
+// MapCVEs correlates both Software and Operating Systems to CVE URIs
 func MapCVEs(mainDB *sql.DB, vulnDB *sql.DB) {
 	logs.Sys.Info("Starting vulnerability correlation...")
 
-	rows, err := mainDB.Query(`
-        SELECT asw.agent_id, s.id, s.cpe_uri, s.version 
-        FROM agent_software asw
-        JOIN software s ON asw.software_id = s.id
-        WHERE s.cpe_uri IS NOT NULL`)
-	if err != nil {
-		logs.DB.Error("Failed to query software for CVE correlation", "error", err)
-		return
-	}
+	// Correlate Software Vulnerabilities
+	rows, _ := mainDB.Query(`
+		SELECT asw.agent_id, s.id, s.cpe_uri, s.version 
+		FROM agent_software asw 
+		JOIN software s ON asw.software_id = s.id 
+		WHERE s.cpe_uri IS NOT NULL AND s.cpe_uri != ''`)
 	defer rows.Close()
-
 	for rows.Next() {
 		var agentID string
 		var softwareID int
 		var cpeURI, swVersion string
 		rows.Scan(&agentID, &softwareID, &cpeURI, &swVersion)
+		correlate(mainDB, vulnDB, agentID, &softwareID, cpeURI, swVersion, "application")
+	}
 
-		vRows, err := vulnDB.Query(`
-            SELECT sv.cve_id, sv.version_start, sv.version_end, v.severity, v.cvss_score 
-            FROM software_vulnerabilities sv
-            JOIN vulnerabilities v ON sv.cve_id = v.cve_id
-            WHERE sv.cpe_uri = ?`, cpeURI)
+	// Correlate OS Vulnerabilities
+	osRows, _ := mainDB.Query(`
+		SELECT agent_id, os_cpe_uri, os_version 
+		FROM agents 
+		WHERE os_cpe_uri IS NOT NULL AND os_cpe_uri != ''`)
+	defer osRows.Close()
+	for osRows.Next() {
+		var agentID, cpeURI, osVersion string
+		osRows.Scan(&agentID, &cpeURI, &osVersion)
+		correlate(mainDB, vulnDB, agentID, nil, cpeURI, osVersion, "os")
+	}
+}
 
-		if err != nil {
-			logs.DB.Error("Failed to query vulnerabilities for CPE", "cpe", cpeURI, "error", err)
-			continue
-		}
+// correlate handles the actual matching logic and DB insertion
+func correlate(mainDB, vulnDB *sql.DB, agentID string, swID *int, cpeURI, version, targetType string) {
+	// Query the vulnerability DB for any CVEs matching this CPE
+	vRows, err := vulnDB.Query(`
+		SELECT sv.cve_id, sv.version_start, sv.version_end, v.severity, v.cvss_score 
+		FROM software_vulnerabilities sv 
+		JOIN vulnerabilities v ON sv.cve_id = v.cve_id 
+		WHERE sv.cpe_uri = ?`, cpeURI)
+	if err != nil {
+		return
+	}
+	defer vRows.Close()
 
-		for vRows.Next() {
-			var cveID, severity string
-			var vStart, vEnd sql.NullString
-			var score float64
-			vRows.Scan(&cveID, &vStart, &vEnd, &severity, &score)
+	for vRows.Next() {
+		var cveID, severity string
+		var vStart, vEnd sql.NullString
+		var score float64
+		vRows.Scan(&cveID, &vStart, &vEnd, &severity, &score)
 
-			isVulnerable := false
-			if !vStart.Valid && !vEnd.Valid {
-				isVulnerable = true
-			} else {
-				inStartRange := !vStart.Valid || versionCompare(swVersion, vStart.String) >= 0
-				inEndRange := !vEnd.Valid || versionCompare(swVersion, vEnd.String) < 0
-				if inStartRange && inEndRange {
-					isVulnerable = true
-				}
+		// Check if the specific version reported by the agent falls within the CVE's range
+		if isVulnerable(version, vStart, vEnd) {
+			// Insert into discovered_vulnerabilities
+			_, err := mainDB.Exec(`
+				INSERT OR IGNORE INTO discovered_vulnerabilities 
+				(agent_id, target_type, software_id, cpe_uri, cve_id, severity, cvss_score) 
+				VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				agentID, targetType, swID, cpeURI, cveID, severity, score)
+
+			if err == nil {
+				logs.Audit.Warn("Vulnerability Alert",
+					"agent", agentID,
+					"type", targetType,
+					"cve", cveID,
+					"severity", severity)
 			}
-
-			if isVulnerable {
-				_, err = mainDB.Exec(`
-                    INSERT OR IGNORE INTO discovered_vulnerabilities 
-                    (agent_id, software_id, cve_id, severity, cvss_score) 
-                    VALUES (?, ?, ?, ?, ?)`,
-					agentID, softwareID, cveID, severity, score)
-
-				if err == nil {
-					// ROUTED TO AUDIT LOGGER: This is a significant security event
-					logs.Audit.Warn("Vulnerability Correlation Alert",
-						"agent", agentID,
-						"cve", cveID,
-						"version", swVersion,
-						"severity", severity)
-				} else {
-					logs.DB.Error("Failed to record discovered vulnerability", "error", err)
-				}
-			}
 		}
-		vRows.Close()
 	}
 }
 
 func StartCVEMapper(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Minute)
-	mainDB := Main_Database
-	vulnDB := CVE_Database
 	go func() {
 		defer ticker.Stop()
-		logs.Sys.Info("CVE Correlation Mapper worker started.")
-		MapCVEs(mainDB, vulnDB)
 		for {
 			select {
 			case <-ticker.C:
-				MapCVEs(mainDB, vulnDB)
+				MapCVEs(Main_Database, CVE_Database)
 			case <-ctx.Done():
-				logs.Sys.Info("Shutting down CVE Correlation Mapper...")
 				return
 			}
 		}

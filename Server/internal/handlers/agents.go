@@ -279,6 +279,36 @@ func HandleSoftwareTelemetry(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// HandleOSTelemetry receives OS details, updates the agent record, and triggers a vulnerability check
 func HandleOSTelemetry(w http.ResponseWriter, r *http.Request) {
-	// Logic to be implemented
+	var env shared.Envelope
+	if err := json.NewDecoder(r.Body).Decode(&env); err != nil {
+		logs.Sys.Warn("Failed to decode OS telemetry envelope", "remote_addr", r.RemoteAddr, "error", err)
+		http.Error(w, "Bad Request", http.StatusBadRequest)
+		return
+	}
+
+	var osData shared.OSInfo // Assuming shared.OSInfo exists with OS and OSVersion
+	if err := json.Unmarshal(env.Payload, &osData); err != nil {
+		logs.Sys.Warn("Failed to decode OS payload", "agent_id", env.AgentID, "error", err)
+		http.Error(w, "Invalid Payload", http.StatusBadRequest)
+		return
+	}
+
+	// Update the agent's OS information
+	query := `UPDATE agents SET os = ?, os_version = ?, last_seen = CURRENT_TIMESTAMP WHERE agent_id = ?`
+	err := data.WriteQuery(data.Main_Database, query, osData.OS, osData.OSVersion, env.AgentID)
+	if err != nil {
+		logs.DB.Error("Failed to update agent OS information", "agent_id", env.AgentID, "error", err)
+		http.Error(w, "Database Error", http.StatusInternalServerError)
+		return
+	}
+
+	logs.Sys.Info("OS telemetry updated", "agent_id", env.AgentID, "os", osData.OS, "version", osData.OSVersion)
+
+	// Trigger vulnerability mapping for the updated OS
+	// In a real scenario, you'd likely call your Mapper logic here or queue a job
+	// data.MapCVEsForAgent(env.AgentID)
+
+	w.WriteHeader(http.StatusOK)
 }

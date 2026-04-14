@@ -157,6 +157,7 @@ func setupMainSQL(db *sql.DB) {
         ip_address TEXT,
         os TEXT,
         os_version TEXT,
+		os_cpe_uri TEXT,
         status TEXT DEFAULT 'active',
         binary_version TEXT,
         last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -177,19 +178,23 @@ func setupMainSQL(db *sql.DB) {
         FOREIGN KEY (agent_id) REFERENCES agents(agent_id) ON DELETE CASCADE,
         FOREIGN KEY (software_id) REFERENCES software(id) ON DELETE CASCADE
     );
-    CREATE TABLE IF NOT EXISTS discovered_vulnerabilities (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        agent_id TEXT,
-        software_id INTEGER,
-        cve_id TEXT,
-        severity TEXT,        
-        cvss_score REAL,         
-        detected_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        status TEXT DEFAULT 'open',
-        FOREIGN KEY (agent_id) REFERENCES agents(agent_id) ON DELETE CASCADE,
-        FOREIGN KEY (software_id) REFERENCES software(id) ON DELETE CASCADE,
-        UNIQUE(agent_id, software_id, cve_id) 
-    );
+	CREATE TABLE IF NOT EXISTS discovered_vulnerabilities (
+		id            INTEGER PRIMARY KEY AUTOINCREMENT,
+		agent_id      TEXT NOT NULL,
+		target_type   TEXT NOT NULL CHECK(target_type IN ('application', 'os')),
+		software_id   INTEGER, 
+		cpe_uri       TEXT, 
+		cve_id        TEXT NOT NULL,
+		severity      TEXT,         
+		cvss_score    REAL,         
+		detected_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+		status        TEXT DEFAULT 'open',
+		
+		FOREIGN KEY (agent_id) REFERENCES agents(agent_id) ON DELETE CASCADE,
+		FOREIGN KEY (software_id) REFERENCES software(id) ON DELETE CASCADE,
+		
+		UNIQUE(agent_id, target_type, software_id, cve_id) 
+	);
     CREATE INDEX IF NOT EXISTS idx_agent_hostname ON agents(hostname);
     CREATE INDEX IF NOT EXISTS idx_sw_cpe ON software(cpe_uri);
     CREATE INDEX IF NOT EXISTS idx_dv_agent ON discovered_vulnerabilities(agent_id);
