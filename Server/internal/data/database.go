@@ -18,6 +18,9 @@ var User_Database *sql.DB
 var CPE_Database *sql.DB
 var CVE_Database *sql.DB
 
+// WaitGroup used to ensure database processes are complete before server closes
+var WG sync.WaitGroup
+
 // initDB initializes a database connection
 func initDB(path string) *sql.DB {
 	logs.DB.Info("Initializing database connection", "path", path)
@@ -30,7 +33,7 @@ func initDB(path string) *sql.DB {
 		os.Exit(1)
 	}
 
-	db.SetMaxOpenConns(1)
+	db.SetMaxOpenConns(10)
 
 	err = db.Ping()
 	if err != nil {
@@ -234,7 +237,6 @@ func StartDatabases() {
 
 // CloseDatabases ensures all connections are closed safely
 func CloseDatabases() {
-	logs.Sys.Info("Closing all database connections...")
 	dbs := map[string]*sql.DB{
 		"Main": Main_Database,
 		"User": User_Database,
@@ -249,6 +251,7 @@ func CloseDatabases() {
 			}
 		}
 	}
+	logs.Sys.Info("Databases closed successfully")
 	CloseAllArchives()
 }
 

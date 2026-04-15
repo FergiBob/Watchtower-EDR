@@ -169,7 +169,10 @@ func StartCPEUpdater(ctx context.Context) {
 		return
 	}
 
+	WG.Add(1)
+
 	go func() {
+		defer WG.Done()
 		defer ticker.Stop()
 		logs.Sys.Info("CPE Updater background worker started.")
 
@@ -238,8 +241,10 @@ func MapCPEs() error {
 
 func StartCPEMapper(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Minute)
+	WG.Add(1)
 	go func() {
 		defer ticker.Stop()
+		defer WG.Done()
 		logs.Sys.Info("CPE-Software Mapper background worker started.")
 
 		if err := MapCPEs(); err != nil {
@@ -253,7 +258,7 @@ func StartCPEMapper(ctx context.Context) {
 					logs.Sys.Error("CPE-Software mapping failed", "error", err)
 				}
 			case <-ctx.Done():
-				logs.Sys.Info("Shutting down CPE-Software Mapper...")
+				logs.Sys.Info("CPE-Software Mapper stopped.")
 				return
 			}
 		}
@@ -417,7 +422,9 @@ func StartCVEUpdater(ctx context.Context) {
 		return
 	}
 
+	WG.Add(1)
 	go func() {
+		defer WG.Done()
 		defer ticker.Stop()
 		logs.Sys.Info("CVE Updater background worker started.")
 
@@ -556,13 +563,17 @@ func correlate(mainDB, vulnDB *sql.DB, agentID string, swID *int, cpeURI, versio
 
 func StartCVEMapper(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Minute)
+
+	WG.Add(1)
 	go func() {
+		defer WG.Done()
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
 				MapCVEs(Main_Database, CVE_Database)
 			case <-ctx.Done():
+				logs.Sys.Info("CVE Mapper stopped.")
 				return
 			}
 		}

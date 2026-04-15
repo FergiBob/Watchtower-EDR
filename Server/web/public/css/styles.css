@@ -741,6 +741,41 @@ input[readonly] {
     opacity: 0.9;
 }
 
+/* --- Shutdown overlay --- */
+/* The background dimming effect */
+#shutdown-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.85);
+    z-index: 999999; /* Set high to cover everything */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    text-align: center;
+    font-family: sans-serif;
+    user-select: none;
+}
+
+/* The loading spinner using your theme variable */
+.shutdown-spinner {
+    border: 4px solid rgba(255, 255, 255, 0.1); /* Light ghost border */
+    border-top: 4px solid var(--accent-primary); /* YOUR THEME COLOR */
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    animation: spin 2s linear infinite;
+    margin: 0 auto 20px;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
 /* Log Viewer Styles */
 .log-container {
     background: #1f1f1f; 

@@ -32,6 +32,15 @@ func HandleShutdown(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	csrfCookie, err := r.Cookie("csrf_token")
+	csrfHeader := r.Header.Get("X-CSRF-Token")
+
+	if err != nil || csrfHeader == "" || csrfCookie.Value != csrfHeader {
+		logs.Audit.Warn("Security Alert: CSRF validation failed on shutdown attempt", "remote_addr", r.RemoteAddr, "header_present", csrfHeader != "")
+		http.Error(w, "Security validation failed (CSRF)", http.StatusForbidden)
+		return
+	}
+
 	username, err := GetUsernameFromToken(r)
 	if err != nil {
 		// Log as an Audit Warning: Someone attempted a shutdown without a valid session

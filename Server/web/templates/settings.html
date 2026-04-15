@@ -92,9 +92,7 @@
                 <h2>System Operations</h2>
                 <p class="field-help">Restarting or shutting down the server will disconnect all active agent sessions.</p>
                 <div class="action-buttons">
-                    <form action="/server/shutdown" method="POST" onsubmit="return confirm('WARNING: This will take the EDR offline. Continue?')">
-                        <button type="submit" class="btn-danger">Shutdown Server</button>
-                    </form>
+                    <button type="button" class="btn-danger" onclick="handleShutdown(event)">Shutdown Server</button>
                 </div>
             </div>
         </div>
@@ -158,27 +156,65 @@
     }
 
     // Confirms the shutdown request gracefully
-    function handleShutdown(event) {
-    if (!confirm('WARNING: This will take the Watchtower EDR offline. Continue?')) {
-        event.preventDefault();
-        return false;
+    async function handleShutdown(event) {
+        // Initial Confirmation
+        if (!confirm('WARNING: This will take the Watchtower EDR offline. Continue?')) {
+            return;
+        }
+
+        // Helper to extract the CSRF token from cookies
+        const getCookie = (name) => {
+            const value = `; ${document.cookie}`;
+            const parts = value.split(`; ${name}=`);
+            if (parts.length === 2) return parts.pop().split(';').shift();
+        };
+
+        // Create an overlay with a shutdown animation
+        const overlay = document.createElement('div');
+        overlay.id = 'shutdown-overlay'; 
+        overlay.innerHTML = `
+            <div>
+                <div class="shutdown-spinner"></div> <h1>Watchtower System Offline</h1>
+                <p>The server has been shut down.<br>
+                You will be redirected once the service is back online.</p>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+
+        try {
+            // The Secure Request
+            const response = await fetch('/server/shutdown', {
+                method: 'POST',
+                headers: {
+                    'X-CSRF-Token': getCookie('csrf_token'), // Safety check
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            if (response.ok) {
+                console.log("Shutdown initiated successfully.");
+                // Start checking if server comes back
+                pollForServer();
+            } else {
+                const err = await response.text();
+                alert("Shutdown failed: " + err);
+                overlay.remove();
+            }
+        } catch (error) {
+            // A network error is expected here because the server is literally dying
+            console.log("Connection lost - Server is likely offline.");
+            pollForServer();
+        }
     }
 
-    // Shutdown overlay
-    const overlay = document.createElement('div');
-    overlay.id = 'shutdown-overlay';
-    overlay.innerHTML = `
-        <div class="shutdown-message">
-            <div class="spinner"></div>
-            <h1>Watchtower System Offline</h1>
-            <p>The server is shutting down gracefully. You will be redirected to login once the service is back online.</p>
-        </div>
-    `;
-    document.body.appendChild(overlay);
-
-    // Form will now submit naturally
-    return true;
-}
+    function pollForServer() {
+        setInterval(async () => {
+            try {
+                const check = await fetch('/login');
+                if (check.ok) window.location.href = '/login';
+            } catch (e) { pollForServer() }
+        }, 10000);
+    }
 </script>
 
 

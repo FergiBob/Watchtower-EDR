@@ -24,10 +24,6 @@ func main() {
 	// Establishes connection to databases and updates cpe dictionary
 	data.StartDatabases()
 
-	// Ensures database connections are closed when the program shuts down
-	// This will now actually run because we are avoiding os.Exit!
-	defer data.CloseDatabases()
-
 	// Updates databases and ensures schemas are correct
 	data.VerifyDatabases()
 
@@ -86,6 +82,9 @@ func main() {
 	// Trigger cancellation of background tasks (scheduled taks like CPE Updater, Agent Cleaner, and Agent Status Updater)
 	cancel()
 
+	logs.Sys.Info("Waiting for background workers to exit...")
+	data.WG.Wait()
+
 	// --------------------------------------------------------
 	//                  GRACEFUL SHUTDOWN
 	//---------------------------------------------------------
@@ -100,5 +99,9 @@ func main() {
 		logs.Sys.Error("Graceful shutdown failed", "error", err)
 	}
 
+	logs.Sys.Info("Closing all database connections...")
+	data.CloseDatabases()
+
+	time.Sleep(1 * time.Second)
 	logs.Sys.Info("Watchtower is now offline.")
 }

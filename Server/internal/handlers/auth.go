@@ -4,7 +4,9 @@ package handlers
 // This includes hashing passwords, protecting routes, generating JWT tokens, etc.
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"time"
@@ -28,6 +30,15 @@ type LoginPageData struct {
 type Claims struct {
 	Username string `json:"username"`
 	jwt.RegisteredClaims
+}
+
+// Helper function to generate a secure random string
+func generateRandomString(n int) (string, error) {
+	bytes := make([]byte, n)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(bytes), nil
 }
 
 // Takes a string (password) and returns a string (hashed password) and an error code
@@ -102,13 +113,32 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set Cookie
+	// Set JWT Cookie
 	http.SetCookie(w, &http.Cookie{
 		Name:     "session_token",
 		Value:    tokenString,
 		Expires:  expirationTime,
 		Path:     "/",  // Makes cookies accessible on all other requests
 		HttpOnly: true, // Prevents JavaScript access (XSS protection)
+		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
+	})
+
+	// Generate a random CSRF token
+	csrfToken, err := generateRandomString(32)
+	if err != nil {
+		logs.Sys.Error("Failed to generate CSRF token", "error", err)
+		// We can proceed with login, but shutdown might fail later
+	}
+
+	// Set CSRF Cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     "csrf_token",
+		Value:    csrfToken,
+		Expires:  expirationTime,
+		Path:     "/",
+		HttpOnly: false, // Must be false so JS can read it
+		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 	})
 

@@ -18,5 +18,6 @@ go.work
 
 # Database files and logs
 *.db 
+*.db-journal
 *.log 
 *.zip
