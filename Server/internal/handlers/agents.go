@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 
@@ -64,35 +65,28 @@ func EnrollAgent(req shared.RegistrationRequest, remoteAddr string) (string, err
 }
 
 func UpdateAgentData(agentID string, hostname string, remoteAddr string) (shared.HeartbeatResponse, error) {
-	// Initialize response with default frequency from global config
 	resp := shared.HeartbeatResponse{
 		TelemetryFrequency: internal.AppConfig.Agents.TelemetryFrequency,
 	}
 
-	// Get the current status
+	// FIX: Use the READ pool for the status check
 	queryStatus := `SELECT status FROM agents WHERE agent_id = ?`
-	err := data.QuerySingleRow(data.Main_Database, queryStatus, []any{agentID}, &resp.Status)
+	err := data.QuerySingleRow(data.Main_Read_Database, queryStatus, []any{agentID}, &resp.Status)
 	if err != nil {
-		logs.DB.Debug("Heartbeat attempted for unknown agent", "agent_id", agentID)
-		return resp, err // Agent likely doesn't exist
+		return resp, err
 	}
 
-	// If decommissioned, stop here
 	if resp.Status == "decommissioned" {
 		return resp, nil
 	}
 
-	// Update metadata for active agents
 	queryUpdate := `
         UPDATE agents 
         SET hostname = ?, ip_address = ?, last_seen = CURRENT_TIMESTAMP, status = 'active'
         WHERE agent_id = ?`
 
+	// WriteQuery now handles the PriorityLock and the Transaction for you
 	err = data.WriteQuery(data.Main_Database, queryUpdate, hostname, remoteAddr, agentID)
-	if err != nil {
-		logs.DB.Error("Failed to update agent metadata during heartbeat", "agent_id", agentID, "error", err)
-	}
-
 	return resp, err
 }
 
@@ -198,84 +192,54 @@ func HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 // HandleSoftwareTelemetry receives Client software payload and updates inventory
 func HandleSoftwareTelemetry(w http.ResponseWriter, r *http.Request) {
 	var env shared.Envelope
-	db := data.Main_Database
-
 	if err := json.NewDecoder(r.Body).Decode(&env); err != nil {
-		logs.Sys.Warn("Failed to decode software telemetry envelope", "remote_addr", r.RemoteAddr, "error", err)
 		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
 	}
 
 	var softwareList []shared.Software
 	if err := json.Unmarshal(env.Payload, &softwareList); err != nil {
-		logs.Sys.Warn("Failed to decode software payload", "agent_id", env.AgentID, "error", err)
 		http.Error(w, "Invalid Payload", http.StatusBadRequest)
 		return
 	}
 
-	tx, err := db.Begin()
+	// 1. Manually lock the writer for the duration of this agent's update
+	data.PriorityLock.Lock()
+	defer data.PriorityLock.Unlock()
+
+	tx, err := data.Main_Database.Begin()
 	if err != nil {
-		logs.DB.Error("Software telemetry transaction start failed", "error", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		http.Error(w, "DB Busy", 503)
 		return
 	}
 	defer tx.Rollback()
 
-	// Update heartbeat timestamp
-	_, _ = tx.Exec(`UPDATE agents SET last_seen = CURRENT_TIMESTAMP WHERE agent_id = ?`, env.AgentID)
+	tx.Exec(`UPDATE agents SET last_seen = CURRENT_TIMESTAMP WHERE agent_id = ?`, env.AgentID)
+	tx.Exec("DELETE FROM agent_software WHERE agent_id = ?", env.AgentID)
 
-	// Clear this agent's inventory links
-	_, err = tx.Exec("DELETE FROM agent_software WHERE agent_id = ?", env.AgentID)
-	if err != nil {
-		logs.DB.Error("Failed to clear agent software links", "agent_id", env.AgentID, "error", err)
-		return
-	}
-
-	// Prepare the "Get or Create" statement for the software dictionary
-	softStmt, err := tx.Prepare(`
-        INSERT INTO software (name, version, vendor) 
-        VALUES (?, ?, ?)
-        ON CONFLICT(name, version, vendor) DO UPDATE SET name=excluded.name
-        RETURNING id`)
-	if err != nil {
-		logs.DB.Error("Failed to prepare software dictionary statement", "error", err)
-		return
-	}
-	defer softStmt.Close()
-
-	// Prepare the link statement
-	linkStmt, err := tx.Prepare(`
-        INSERT INTO agent_software (agent_id, software_id, install_date) 
-        VALUES (?, ?, ?)`)
-	if err != nil {
-		logs.DB.Error("Failed to prepare link statement", "error", err)
-		return
-	}
-	defer linkStmt.Close()
-
-	// Process loop
 	for _, s := range softwareList {
 		var softwareID int64
-		err := softStmt.QueryRow(s.Name, s.Version, s.Manufacturer).Scan(&softwareID)
-		if err != nil {
-			logs.DB.Warn("Could not resolve software ID", "name", s.Name, "error", err)
-			continue
+		err := tx.QueryRow(`SELECT id FROM software WHERE name=? AND version=? AND vendor=?`,
+			s.Name, s.Version, s.Manufacturer).Scan(&softwareID)
+
+		if err == sql.ErrNoRows {
+			res, err := tx.Exec(`INSERT INTO software (name, version, vendor) VALUES (?, ?, ?)`,
+				s.Name, s.Version, s.Manufacturer)
+			if err != nil {
+				continue
+			}
+			softwareID, _ = res.LastInsertId()
 		}
 
-		// Link the agent to the software ID
-		_, err = linkStmt.Exec(env.AgentID, softwareID, s.Date)
-		if err != nil {
-			logs.DB.Warn("Software linking failed", "agent", env.AgentID, "soft_id", softwareID, "error", err)
-		}
+		tx.Exec(`INSERT INTO agent_software (agent_id, software_id, install_date) VALUES (?, ?, ?)`,
+			env.AgentID, softwareID, s.Date)
 	}
 
 	if err := tx.Commit(); err != nil {
-		logs.DB.Error("Software telemetry commit failed", "agent_id", env.AgentID, "error", err)
-		http.Error(w, "Database Error", http.StatusInternalServerError)
+		logs.DB.Error("Telemetry commit failed", "error", err)
+		http.Error(w, "Retry Later", 500)
 		return
 	}
-
-	logs.Sys.Debug("Software relational sync complete", "agent", env.AgentID, "items", len(softwareList))
 	w.WriteHeader(http.StatusOK)
 }
 

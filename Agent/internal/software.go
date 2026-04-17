@@ -11,8 +11,6 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
-// Software defines the data associated with a given software installation and maps it for use in a json
-
 // collectSoftwareData detects the OS and returns a slice of all found software
 func CollectSoftwareData() ([]shared.Software, error) {
 	switch runtime.GOOS {

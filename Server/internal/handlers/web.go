@@ -29,7 +29,7 @@ type BaseData struct {
 type DashboardData struct {
 	BaseData           BaseData
 	AgentCount         int
-	StaleCount         int
+	OfflineCount       int
 	VulnerabilityCount int
 	SoftwareCount      int
 }
@@ -65,21 +65,20 @@ func LoadLoginTemplate() {
 
 // getDashboardData collects all necessary data for the dashboard page, except for the username
 func getDashboardData() (DashboardData, error) {
-	const baseQuery = `
+	const query = `
         SELECT
             (SELECT COUNT(*) FROM agents) AS agent_count,
-            (SELECT COUNT(*) FROM agents WHERE last_seen < datetime('now', '%s')) AS stale_count,
+            (SELECT COUNT(*) FROM agents WHERE last_seen < datetime('now', ?)) AS offline_count,
             (SELECT COUNT(*) FROM discovered_vulnerabilities) AS vulnerability_count,
             (SELECT COUNT(DISTINCT name) FROM software) AS software_count
     `
 
-	modifier := fmt.Sprintf("%d minutes", internal.AppConfig.Agents.OfflineTimer)
-	query := fmt.Sprintf(baseQuery, modifier) // Simpler than strings.ReplaceAll
+	modifier := fmt.Sprintf("-%d minutes", internal.AppConfig.Agents.OfflineTimer)
 
 	var d DashboardData
 
-	err := data.QuerySingleRow(data.Main_Database, query, nil,
-		&d.AgentCount, &d.StaleCount, &d.VulnerabilityCount, &d.SoftwareCount)
+	err := data.QuerySingleRow(data.Main_Read_Database, query, []any{modifier},
+		&d.AgentCount, &d.OfflineCount, &d.VulnerabilityCount, &d.SoftwareCount)
 
 	if err != nil {
 		logs.DB.Error("failed to query dashboard counts", "error", err)

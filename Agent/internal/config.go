@@ -11,8 +11,7 @@ import (
 
 // Config matches the JSON structure we discussed
 type Config struct {
-	AgentID       int      `json:"agent_id"`
-	OS            string   `json:"system_os"`
+	AgentID       string   `json:"agent_id"`
 	UploadFreq    int      `json:"upload_interval_minutes"`
 	HashFreq      int      `json:"hash_interval_minutes"`
 	HeartbeatFreq int      `json:"heartbeat_interval_minutes"`
@@ -76,6 +75,11 @@ func (s *SafeConfig) Update(newCfg Config) error {
 	return nil
 }
 
+// Save persists the current in-memory config to the disk path
+func (s *SafeConfig) Save() error {
+	return s.Update(s.Get())
+}
+
 // Initial Load: Finds the file and returns the SafeConfig pointer
 func LoadConfig() (*SafeConfig, error) {
 	path, err := findConfigPath()
@@ -107,7 +111,7 @@ func findConfigPath() (string, error) {
 }
 
 // getAgentID returns the agentID stored in the config file
-func getAgentID() int {
+func getAgentID() string {
 	agentID := AppConfig().Get().AgentID
 	return agentID
 }
