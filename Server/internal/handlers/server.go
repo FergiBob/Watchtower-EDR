@@ -88,14 +88,40 @@ func BuildServer() (*http.Server, error) {
 	fileServer := http.FileServer(http.Dir("./web/public"))
 	mux.Handle("/public/", http.StripPrefix("/public/", fileServer))
 
+	// Endpoint for Windows Agent download
+	mux.HandleFunc("/api/v1/download/agent-windows", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "./web/downloads/windows/agent-windows.exe")
+	})
+
+	// Endpoint for Linux Agent download
+	mux.HandleFunc("/api/v1/download/agent-linux", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "./web/downloads/linux/agent-linux")
+	})
+
 	// --- WEB UI ROUTES ---
 	mux.HandleFunc("/login", LoginHandler)
 	mux.HandleFunc("/logout", LogoutHandler)
 
 	// Protected Routes via AuthMiddleware
-	mux.Handle("/", AuthMiddleware(http.HandlerFunc(homeHandler)))
+
+	mux.Handle("/vulnerabilities", AuthMiddleware(http.HandlerFunc(VulnerabilitiesPageHandler)))
+
 	mux.Handle("/settings", AuthMiddleware(http.HandlerFunc(settingsHandler)))
 	mux.Handle("/server/shutdown", AuthMiddleware(http.HandlerFunc(HandleShutdown)))
+
+	// Software web routes
+	mux.Handle("/software", AuthMiddleware(http.HandlerFunc(softwareHandler)))
+	mux.Handle("/api/cpe/search", AuthMiddleware(http.HandlerFunc(CPESearchHandler)))
+	mux.Handle("POST /api/software/{id}/map", AuthMiddleware(http.HandlerFunc(CPEMapHandler)))
+
+	// Agents web routes
+	mux.Handle("GET /agents", AuthMiddleware(http.HandlerFunc(AgentsPageHandler)))
+	mux.Handle("GET /api/agent/{id}", AuthMiddleware(http.HandlerFunc(GetAgentDetailsHandler)))
+	mux.Handle("POST /api/agent/{id}/metadata", AuthMiddleware(http.HandlerFunc(UpdateAgentMetadataHandler)))
+	mux.Handle("POST /api/agent/{id}/decommission", AuthMiddleware(http.HandlerFunc(DecommissionAgentHandler)))
+	mux.HandleFunc("/api/installer/generate", InstallerGeneratorHandler)
+
+	mux.Handle("/", AuthMiddleware(http.HandlerFunc(homeHandler)))
 
 	// Wrap mux in a recovery handler to prevent server crashes on fatal endpoint errors
 	safeHandler := RecoveryMiddleware(mux)
@@ -105,7 +131,7 @@ func BuildServer() (*http.Server, error) {
 		Addr:    ":443",
 		Handler: safeHandler,
 		TLSConfig: &tls.Config{
-			MinVersion: tls.VersionTLS12,
+			MinVersion: tls.VersionTLS13,
 		},
 	}
 
