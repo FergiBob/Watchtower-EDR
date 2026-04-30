@@ -141,7 +141,7 @@ func BuildServer() (*http.Server, error) {
 		Addr:    ":443",
 		Handler: safeHandler,
 		TLSConfig: &tls.Config{
-			MinVersion: tls.VersionTLS13,
+			MinVersion: tls.VersionTLS12,
 		},
 	}
 
