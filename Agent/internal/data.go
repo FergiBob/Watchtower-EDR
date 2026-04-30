@@ -4,6 +4,7 @@ package internal
 
 import (
 	"Watchtower_EDR/shared"
+	"bufio"
 	"bytes"
 	"crypto/tls"
 	"crypto/x509"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -22,19 +24,29 @@ import (
 var SecureClient *http.Client
 
 func InitSecureClient() error {
-	certData, err := os.ReadFile("./internal/server.crt")
+	// Get absolute path to the EXE to prevent Service Working Directory issues
+	exePath, err := os.Executable()
 	if err != nil {
 		return err
+	}
+	basePath := filepath.Dir(exePath)
+	certPath := filepath.Join(basePath, "internal", "server.crt")
+
+	certData, err := os.ReadFile(certPath)
+	if err != nil {
+		return fmt.Errorf("failed to read cert at %s: %w", certPath, err)
 	}
 
 	caCertPool := x509.NewCertPool()
 	caCertPool.AppendCertsFromPEM(certData)
 
 	SecureClient = &http.Client{
-		Timeout: 10 * time.Second,
+		Timeout: 15 * time.Second,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
 				RootCAs: caCertPool,
+				// CRITICAL: Must match the CN/SAN in your server.crt
+				ServerName: "watchtower.local",
 			},
 		},
 	}
@@ -104,50 +116,128 @@ func GetDetailedOSInfo() shared.OSInfo {
 	}
 }
 
-// --- Windows: Using 'caption' and 'version' from CIM ---
 func getWindowsVersion() shared.OSInfo {
-	// We use powershell here because 'wmic' is being deprecated in newer Windows builds
-	out, err := exec.Command("powershell", "-Command", "Get-CimInstance Win32_OperatingSystem | Select-Object -ExpandProperty Caption").Output()
-	if err != nil {
-		return shared.OSInfo{OS: "windows", OSVersion: "Unknown Windows"}
-	}
+	info := shared.OSInfo{OS: "windows", OSName: "Windows", OSVersion: "Unknown", OSBuild: "Unknown", Vendor: "Microsoft", Architecture: "Unknown"}
 
-	// Example output: Microsoft Windows 11 Pro
-	caption := strings.TrimSpace(string(out))
-	caption = strings.TrimPrefix(caption, "Microsoft ")
+	script := `
+		$os = Get-CimInstance Win32_OperatingSystem
+		$regPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion"
+		$properties = Get-ItemProperty $regPath
+		
+		# Combine BuildNumber and UBR to get the full build (e.g., 26200.8246)
+		$fullBuild = if ($properties.UBR) { "$($os.BuildNumber).$($properties.UBR)" } else { $os.BuildNumber }
 
-	return shared.OSInfo{
-		OS:        "windows",
-		OSVersion: caption,
-	}
-}
+		$obj = [PSCustomObject]@{
+			Caption      = [string]$os.Caption
+			Build        = [string]$fullBuild
+			DisplayVer   = [string]$properties.DisplayVersion
+			Vendor       = [string]$os.Manufacturer
+			Architecture = [string]$os.OSArchitecture
+		}
+		$obj | ConvertTo-Json
+	`
 
-// --- Linux: Reading /etc/os-release ---
-func getLinuxVersion() shared.OSInfo {
-	info := shared.OSInfo{OS: "linux", OSVersion: "generic"}
-
-	data, err := os.ReadFile("/etc/os-release")
+	out, err := exec.Command("powershell", "-ExecutionPolicy", "Bypass", "-Command", script).Output()
 	if err != nil {
 		return info
 	}
 
-	lines := strings.Split(string(data), "\n")
-	var name, version string
+	var psOut struct {
+		Caption      string `json:"Caption"`
+		Build        string `json:"Build"`
+		DisplayVer   string `json:"DisplayVer"`
+		Vendor       string `json:"Vendor"`
+		Architecture string `json:"Architecture"`
+	}
 
-	for _, line := range lines {
-		if strings.HasPrefix(line, "ID=") {
-			name = strings.Trim(strings.TrimPrefix(line, "ID="), "\"")
-		}
-		if strings.HasPrefix(line, "VERSION_ID=") {
-			version = strings.Trim(strings.TrimPrefix(line, "VERSION_ID="), "\"")
+	if err := json.Unmarshal(out, &psOut); err == nil {
+		info.OSName = strings.TrimSpace(psOut.Caption)
+		info.OSVersion = strings.TrimSpace(psOut.DisplayVer)
+		info.OSBuild = strings.TrimSpace(psOut.Build)
+		info.Vendor = strings.TrimSpace(psOut.Vendor)
+
+		// Clean up Architecture string (e.g., "64-bit" -> "x64")
+		arch := strings.ToLower(psOut.Architecture)
+		if strings.Contains(arch, "64") {
+			info.Architecture = "x64"
+		} else if strings.Contains(arch, "32") || strings.Contains(arch, "86") {
+			info.Architecture = "x86"
+		} else if strings.Contains(arch, "arm") {
+			info.Architecture = "arm64"
+		} else {
+			info.Architecture = arch
 		}
 	}
 
-	if name != "" {
-		info.OS = name
+	return info
+}
+
+func getLinuxVersion() shared.OSInfo {
+	info := shared.OSInfo{
+		OS:           "linux",
+		OSName:       "Linux",
+		OSVersion:    "Unknown",
+		OSBuild:      "Unknown",
+		Vendor:       "linux",
+		Architecture: "Unknown",
 	}
-	if version != "" {
-		info.OSVersion = version
+
+	// 1. Parse /etc/os-release for Name, Version, and Vendor
+	file, err := os.Open("/etc/os-release")
+	if err == nil {
+		defer file.Close()
+		releaseData := make(map[string]string)
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if !strings.Contains(line, "=") {
+				continue
+			}
+			parts := strings.SplitN(line, "=", 2)
+			key := parts[0]
+			val := strings.Trim(parts[1], ` "`)
+			releaseData[key] = val
+		}
+
+		if val, ok := releaseData["PRETTY_NAME"]; ok {
+			info.OSName = val
+		} else if val, ok := releaseData["NAME"]; ok {
+			info.OSName = val
+		}
+
+		if val, ok := releaseData["VERSION_ID"]; ok {
+			info.OSVersion = val
+		}
+
+		if val, ok := releaseData["ID"]; ok {
+			info.Vendor = val
+		}
+	}
+
+	// 2. Map the Build (Kernel Version)
+	// Example: 6.8.0-40-generic
+	buildOut, err := exec.Command("uname", "-r").Output()
+	if err == nil {
+		info.OSBuild = strings.TrimSpace(string(buildOut))
+	}
+
+	// 3. Map the Architecture
+	// Example: x86_64, aarch64
+	archOut, err := exec.Command("uname", "-m").Output()
+	if err == nil {
+		rawArch := strings.TrimSpace(string(archOut))
+
+		// Normalize architecture to match your Windows logic
+		switch rawArch {
+		case "x86_64":
+			info.Architecture = "x64"
+		case "i386", "i686":
+			info.Architecture = "x86"
+		case "aarch64", "arm64":
+			info.Architecture = "arm64"
+		default:
+			info.Architecture = rawArch
+		}
 	}
 
 	return info
@@ -182,57 +272,131 @@ func uploadData(endpoint string, envelope shared.Envelope) error {
 	return nil
 }
 
-// Heartbeat now handles frequency updates and uses the secure client
-func Heartbeat(serverURL string, agentID string) {
-	// Default to 60 seconds if config is weird
-	freq := AppConfig().Get().HeartbeatFreq * 60
-	if freq <= 0 {
-		freq = 60
+func ExecuteSelfUninstall() {
+	// Get the path to the current running binary
+	exe, err := os.Executable()
+	if err != nil {
+		slog.Error("Failed to get executable path for uninstallation", "error", err)
+		// We don't return here because we still want to try to remove the service/configs
 	}
+
+	switch runtime.GOOS {
+	case "linux":
+		// 1. Stop and Disable Service
+		exec.Command("systemctl", "stop", "watchtower-agent").Run()
+		exec.Command("systemctl", "disable", "watchtower-agent").Run()
+
+		// 2. Remove Service File and Configs
+		os.Remove("/etc/systemd/system/watchtower-agent.service")
+		exec.Command("systemctl", "daemon-reload").Run()
+		os.Remove("/etc/watchtower/server.crt")
+		os.Remove("/etc/watchtower/config.json")
+
+		// 3. Delete Binary
+		// Now using the 'exe' variable correctly
+		if exe != "" {
+			os.Remove(exe)
+		}
+
+	case "windows":
+		// 1. Remove the Windows Service
+		exec.Command("cmd", "/c", "sc stop WatchtowerAgent & sc delete WatchtowerAgent").Run()
+
+		// 2. Delete Configs
+		installDir := `C:\Program Files\Watchtower`
+		os.Remove(installDir + `\server.crt`)
+		os.Remove(installDir + `\config.json`)
+
+		// 3. Self-Delete Binary
+		// We use 'exe' here to tell the cmd process exactly what file to delete
+		// after the agent process exits.
+		if exe != "" {
+			script := fmt.Sprintf("timeout /t 5 /nobreak > NUL & del /f /q \"%s\" & rmDir /s /q \"%s\"", exe, installDir)
+			exec.Command("cmd", "/c", script).Start()
+		}
+	}
+}
+
+// Heartbeat now handles frequency updates and uses the secure client
+
+func Heartbeat(serverURL string, agentID string, enrollmentToken string) {
+	currentID := agentID
+
+	// Initialize frequency from config
+	// Assuming HeartbeatFreq in config is stored in minutes
+	conf := AppConfig().Get()
+	freq := conf.HeartbeatFreq * 60
+	if freq <= 0 {
+		freq = 60 // Default to 1 minute if unset
+	}
+
+	slog.Info("Heartbeat loop started", "initial_freq_seconds", freq)
 
 	for {
 		hostname, _ := os.Hostname()
 		hbData := shared.HeartbeatData{
-			AgentID:  agentID,
+			AgentID:  currentID,
 			Hostname: hostname,
 		}
 
-		// 1. MUST marshal the data into the payload first
 		payload, _ := json.Marshal(hbData)
-
-		// 2. Wrap it in the Envelope (just like you did for Software)
 		envelope := shared.Envelope{
-			AgentID:   agentID,
+			AgentID:   currentID,
 			Timestamp: time.Now(),
 			Payload:   payload,
 		}
 
 		jsonData, _ := json.Marshal(envelope)
 
+		// Use a background context for the request
 		resp, err := SecureClient.Post(serverURL+"/api/v1/agent/heartbeat", "application/json", bytes.NewBuffer(jsonData))
 
 		if err != nil {
-			slog.Error("Heartbeat connection failed", "error", err)
+			slog.Error("Heartbeat failed", "error", err)
+			// Wait a bit before retrying on network error
 			time.Sleep(60 * time.Second)
 			continue
 		}
 
-		// 3. Check for Server Errors (Prevent slamming the server on 400/500 errors)
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			slog.Warn("Heartbeat rejected by server", "status", resp.Status)
+		// Handle Status Gone (Decommissioned)
+		if resp.StatusCode == http.StatusGone {
+			slog.Warn("Agent decommissioned by server (410). Initiating self-uninstall.")
 			resp.Body.Close()
-			time.Sleep(60 * time.Second)
-			continue
+			ExecuteSelfUninstall()
+			os.Exit(0)
 		}
 
 		var hbRes shared.HeartbeatResponse
 		if err := json.NewDecoder(resp.Body).Decode(&hbRes); err == nil {
-			if hbRes.TelemetryFrequency > 0 {
+			// 1. Explicit JSON status check
+			if hbRes.Status == "decommissioned" {
+				slog.Warn("Decommissioned status received in JSON. Cleaning up...")
+				resp.Body.Close()
+				ExecuteSelfUninstall()
+				os.Exit(0)
+			}
+
+			// 2. Update Telemetry Frequency if provided by server
+			if hbRes.TelemetryFrequency > 0 && hbRes.TelemetryFrequency != freq {
+				slog.Info("Server requested frequency change", "old", freq, "new", hbRes.TelemetryFrequency)
+
+				// Update local loop variable
 				freq = hbRes.TelemetryFrequency
+
+				// PERSIST to config.json
+				// We divide by 60 because your config stores minutes
+				updatedConf := AppConfig().Get()
+				updatedConf.HeartbeatFreq = hbRes.TelemetryFrequency / 60
+
+				if err := AppConfig().Update(updatedConf); err != nil {
+					slog.Error("Failed to persist new frequency to config", "error", err)
+				}
 			}
 		}
+
 		resp.Body.Close()
 
+		// 3. Sleep for the duration of 'freq'
 		time.Sleep(time.Duration(freq) * time.Second)
 	}
 }
@@ -307,4 +471,71 @@ func UploadSoftware(serverURL string, agentID string) error {
 
 	// This now internally uses SecureClient via the updated uploadData function
 	return uploadData(serverURL+"/api/v1/agent/telemetry/software", envelope)
+}
+
+func StartSoftwareScheduler(serverURL string, agentID string) {
+	slog.Info("Starting software telemetry scheduler")
+
+	for {
+		// 1. Fetch current frequency inside the loop
+		// This ensures we catch updates pushed by the Heartbeat goroutine
+		conf := AppConfig().Get()
+		minutes := conf.UploadFreq
+		if minutes <= 0 {
+			minutes = 60 // Default to 1 hour
+		}
+
+		interval := time.Duration(minutes) * time.Minute
+
+		// 2. Perform the upload
+		slog.Info("Executing scheduled software telemetry upload", "interval_minutes", minutes)
+		if err := UploadSoftware(serverURL, agentID); err != nil {
+			slog.Error("Scheduled software upload failed", "error", err)
+
+			// Exponential backoff or simple retry:
+			// We wait 5 minutes, then the loop restarts and re-checks the frequency
+			time.Sleep(5 * time.Minute)
+			continue
+		}
+
+		slog.Info("Software telemetry upload successful", "next_run_in", interval)
+
+		// 3. Sleep until the next interval
+		// Note: If the frequency was changed while UploadSoftware was running,
+		// it won't be reflected until THIS sleep finishes and the loop restarts.
+		time.Sleep(interval)
+	}
+}
+
+// StartOSScheduler runs a loop that uploads OS telemetry twice a day (every 12 hours).
+// StartOSScheduler runs a loop that uploads OS telemetry twice a day (every 12 hours).
+func StartOSScheduler(serverURL string, agentID string) {
+	slog.Info("Starting OS telemetry scheduler (Interval: 12 hours)")
+
+	for {
+		// Gather the OSInfo struct
+		osDetails := GetDetailedOSInfo()
+
+		// Wrap it in the standard Envelope
+		payload, _ := json.Marshal(osDetails)
+		envelope := shared.Envelope{
+			AgentID:   agentID,
+			Timestamp: time.Now(),
+			Payload:   payload,
+		}
+
+		// Upload to the OS telemetry endpoint
+		slog.Info("Executing scheduled OS telemetry upload")
+		if err := uploadData(serverURL+"/api/v1/agent/telemetry/os", envelope); err != nil {
+			slog.Error("Scheduled OS upload failed", "error", err)
+			// Retry once after 10 minutes if the server was just temporarily down
+			time.Sleep(10 * time.Minute)
+			continue
+		}
+
+		slog.Info("OS telemetry upload successful")
+
+		// Sleep for 12 hours
+		time.Sleep(12 * time.Hour)
+	}
 }

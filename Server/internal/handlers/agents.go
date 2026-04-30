@@ -1,9 +1,14 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
+	"time"
 
 	"Watchtower_EDR/server/internal"
 	"Watchtower_EDR/server/internal/data"
@@ -69,7 +74,6 @@ func UpdateAgentData(agentID string, hostname string, remoteAddr string) (shared
 		TelemetryFrequency: internal.AppConfig.Agents.TelemetryFrequency,
 	}
 
-	// FIX: Use the READ pool for the status check
 	queryStatus := `SELECT status FROM agents WHERE agent_id = ?`
 	err := data.QuerySingleRow(data.Main_Read_Database, queryStatus, []any{agentID}, &resp.Status)
 	if err != nil {
@@ -90,31 +94,42 @@ func UpdateAgentData(agentID string, hostname string, remoteAddr string) (shared
 	return resp, err
 }
 
-func UpdateAgentDescription(agentID string, description string) error {
-	query := `
-    UPDATE agents 
-    SET 
-        description = ?
-    WHERE agent_id = ?`
+// StartStatusMonitor kicks off a background goroutine that marks stale agents as offline
+func StartStatusMonitor(ctx context.Context) {
+	// Run every minute
+	ticker := time.NewTicker(1 * time.Minute)
 
-	err := data.WriteQuery(data.Main_Database, query, description, agentID)
-	if err != nil {
-		logs.DB.Error("Failed to update agent description", "agent_id", agentID, "error", err)
-	}
-	return err
+	logs.Sys.Info("Starting background agent status monitor")
+
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				MonitorAgentStatus()
+			case <-ctx.Done():
+				logs.Sys.Info("Stopping background agent status monitor...")
+				return
+			}
+		}
+	}()
 }
 
-// RemoveAgent removes an agent from the database using a provided agentID.
-func RemoveAgent(agentID string) error {
-	logs.Audit.Warn("Agent decommissioning triggered", "agent_id", agentID)
+// MonitorAgentStatus performs the actual database update logic
+func MonitorAgentStatus() {
+	// Pull the threshold from your config
+	offlineLimit := fmt.Sprintf("-%d minutes", internal.AppConfig.Agents.OfflineTimer)
 
-	query := `UPDATE agents SET status = 'decommissioned', last_seen = CURRENT_TIMESTAMP WHERE agent_id = ?`
+	query := `
+		UPDATE agents 
+		SET status = 'offline' 
+		WHERE status = 'active' 
+		AND last_seen < datetime('now', ?)` // Use 'now' or 'localtime' to match your DB storage
 
-	err := data.WriteQuery(data.Main_Database, query, agentID)
+	err := data.WriteQuery(data.Main_Database, query, offlineLimit)
 	if err != nil {
-		logs.DB.Error("Failed to mark agent as decommissioned", "agent_id", agentID, "error", err)
+		logs.DB.Error("Failed to run background status monitor", "error", err)
 	}
-	return err
 }
 
 // --------------------------------------------------------------------------------------------
@@ -123,31 +138,57 @@ func RemoveAgent(agentID string) error {
 //
 // --------------------------------------------------------------------------------------------
 
+func ToIPv4(remoteAddr string) string {
+	// 1. Remove the port
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr // Fallback if no port exists
+	}
+
+	// 2. Parse the IP
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return host
+	}
+
+	// 3. Convert to IPv4
+	// To4() returns nil if the address is not an IPv4 address
+	if ipv4 := ip.To4(); ipv4 != nil {
+		return ipv4.String()
+	}
+
+	// Return the original host if it's true IPv6 (and can't be IPv4)
+	return host
+}
+
 // handleAgentEnrollment parses and handles an agent enrollment request
 func handleAgentEnrollment(w http.ResponseWriter, r *http.Request) {
 	var req shared.RegistrationRequest
+
+	ipv4Addr := ToIPv4(r.RemoteAddr)
+
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		logs.Sys.Warn("Failed to decode agent enrollment request", "remote_addr", r.RemoteAddr, "error", err)
+		logs.Sys.Warn("Failed to decode agent enrollment request", "remote_addr", ipv4Addr, "error", err)
 		http.Error(w, "Invalid data", http.StatusBadRequest)
 		return
 	}
 
 	// Verify the enrollment token matches the one in the server config
 	if req.Token != internal.AppConfig.Agents.EnrollmentToken {
-		logs.Audit.Warn("Unauthorized enrollment attempt", "ip", r.RemoteAddr, "hostname", req.Hostname)
+		logs.Audit.Warn("Unauthorized enrollment attempt", "ip", ipv4Addr, "hostname", req.Hostname)
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
 
 	// Write to database
-	agentID, err := EnrollAgent(req, r.RemoteAddr)
+	agentID, err := EnrollAgent(req, ipv4Addr)
 	if err != nil {
 		logs.DB.Error("Failed to enroll agent", "hostname", req.Hostname, "error", err)
 		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
 
-	logs.Audit.Info("Agent enrolled successfully", "agent_id", agentID, "hostname", req.Hostname, "ip", r.RemoteAddr)
+	logs.Audit.Info("Agent enrolled successfully", "agent_id", agentID, "hostname", req.Hostname, "ip", ipv4Addr)
 
 	// Respond with the new AgentID
 	w.Header().Set("Content-Type", "application/json")
@@ -159,9 +200,11 @@ func handleAgentEnrollment(w http.ResponseWriter, r *http.Request) {
 func HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	var env shared.Envelope
 
+	ipv4Addr := ToIPv4(r.RemoteAddr)
+
 	// Decode the standard Envelope
 	if err := json.NewDecoder(r.Body).Decode(&env); err != nil {
-		logs.Sys.Warn("Failed to decode heartbeat envelope", "remote_addr", r.RemoteAddr, "error", err)
+		logs.Sys.Warn("Failed to decode heartbeat envelope", "remote_addr", ipv4Addr, "error", err)
 		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
 	}
@@ -175,7 +218,7 @@ func HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update database using the received envelope
-	resp, err := UpdateAgentData(env.AgentID, hbData.Hostname, r.RemoteAddr)
+	resp, err := UpdateAgentData(env.AgentID, hbData.Hostname, ipv4Addr)
 	if err != nil {
 		logs.DB.Warn("Heartbeat update failed (Agent likely not enrolled)", "agent_id", env.AgentID, "error", err)
 		http.Error(w, "Agent not found", http.StatusNotFound)
@@ -247,32 +290,179 @@ func HandleSoftwareTelemetry(w http.ResponseWriter, r *http.Request) {
 func HandleOSTelemetry(w http.ResponseWriter, r *http.Request) {
 	var env shared.Envelope
 	if err := json.NewDecoder(r.Body).Decode(&env); err != nil {
-		logs.Sys.Warn("Failed to decode OS telemetry envelope", "remote_addr", r.RemoteAddr, "error", err)
+		logs.Sys.Warn("Failed to decode OS telemetry envelope", "error", err)
 		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
 	}
 
-	var osData shared.OSInfo // Assuming shared.OSInfo exists with OS and OSVersion
+	var osData shared.OSInfo
 	if err := json.Unmarshal(env.Payload, &osData); err != nil {
 		logs.Sys.Warn("Failed to decode OS payload", "agent_id", env.AgentID, "error", err)
 		http.Error(w, "Invalid Payload", http.StatusBadRequest)
 		return
 	}
 
-	// Update the agent's OS information
-	query := `UPDATE agents SET os = ?, os_version = ?, last_seen = CURRENT_TIMESTAMP WHERE agent_id = ?`
-	err := data.WriteQuery(data.Main_Database, query, osData.OS, osData.OSVersion, env.AgentID)
+	// Updated Query to include os_name and os_build
+	query := `
+        UPDATE agents 
+        SET os = ?, 
+            os_name = ?, 
+            os_version = ?, 
+            os_build = ?, 
+            last_seen = CURRENT_TIMESTAMP 
+        WHERE agent_id = ?`
+
+	err := data.WriteQuery(data.Main_Database, query,
+		osData.OS,
+		osData.OSName,
+		osData.OSVersion,
+		osData.OSBuild,
+		env.AgentID,
+	)
+
 	if err != nil {
-		logs.DB.Error("Failed to update agent OS information", "agent_id", env.AgentID, "error", err)
+		logs.DB.Error("Failed to update agent OS info", "agent_id", env.AgentID, "error", err)
 		http.Error(w, "Database Error", http.StatusInternalServerError)
 		return
 	}
 
-	logs.Sys.Info("OS telemetry updated", "agent_id", env.AgentID, "os", osData.OS, "version", osData.OSVersion)
+	logs.Sys.Info("OS telemetry updated",
+		"agent_id", env.AgentID,
+		"os", osData.OS,
+		"build", osData.OSBuild,
+	)
 
-	// Trigger vulnerability mapping for the updated OS
-	// In a real scenario, you'd likely call your Mapper logic here or queue a job
-	// data.MapCVEsForAgent(env.AgentID)
+	// NEW: Kick off the CPE Generator for the OS
+	// This function will take the OSName/Build and turn it into a CPE string
+	go data.SearchDictionaryForOSCPE(env.AgentID, osData)
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// ---------------- INSTALLATION SCRIPTS -----------------------
+
+func generateWindowsScript(fqdn, token, certPEM string) string {
+	encodedCert := base64.StdEncoding.EncodeToString([]byte(certPEM))
+
+	return fmt.Sprintf(`# Watchtower EDR Windows Installer
+$ErrorActionPreference = "Stop"
+
+$ServerURL = "https://%s"
+$EnrollToken = "%s"
+$EncodedCert = "%s"
+
+Write-Host "--- Watchtower EDR Deployment ---" -ForegroundColor Cyan
+
+# 1. Path Setup
+$InstallDir = "C:\Program Files\Watchtower"
+$InternalDir = "$InstallDir\internal"
+$LogDir = "$InternalDir\logs"
+
+if (!(Test-Path $LogDir)) { 
+    New-Item -Path $LogDir -ItemType Directory -Force | Out-Null 
+}
+
+# 2. Decode and Write Cert
+$CertPath = "$InternalDir\server.crt"
+if ([string]::IsNullOrEmpty($EncodedCert)) {
+    Write-Host "ERROR: Certificate data is missing from script!" -ForegroundColor Red
+    exit
+}
+
+Write-Host "[*] Writing certificate to $CertPath..."
+$CertBytes = [System.Convert]::FromBase64String($EncodedCert)
+[System.IO.File]::WriteAllBytes($CertPath, $CertBytes)
+
+# 3. Create config.json
+$ConfigPath = "$InstallDir\config.json"
+if (!(Test-Path $ConfigPath)) {
+    Write-Host "[*] Creating config file..."
+    $cfg = @{ agent_id = ""; upload_interval_minutes = 5; heartbeat_interval_minutes = 1 } | ConvertTo-Json
+    $cfg | Out-File -FilePath $ConfigPath -Encoding ascii
+}
+
+# 4. Download Agent
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+[Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
+$AgentPath = "$InstallDir\watchtower-agent.exe"
+
+Write-Host "[*] Downloading agent..."
+$wc = New-Object System.Net.WebClient
+$wc.DownloadFile("$ServerURL/api/v1/download/agent-windows", $AgentPath)
+
+# 5. Service Management
+if (Get-Service "WatchtowerAgent" -ErrorAction SilentlyContinue) {
+    Stop-Service "WatchtowerAgent" -Force
+    & sc.exe delete WatchtowerAgent | Out-Null
+}
+
+$BinPath = '"{0}" -url {1} -token {2}' -f $AgentPath, $ServerURL, $EnrollToken
+New-Service -Name "WatchtowerAgent" -BinaryPathName $BinPath -DisplayName "Watchtower EDR Agent" -StartupType Automatic | Out-Null
+
+Start-Service "WatchtowerAgent"
+Write-Host "[+] Installation Complete." -ForegroundColor Green
+`, fqdn, token, encodedCert)
+}
+
+func generateLinuxScript(fqdn, token, certPEM string) string {
+	return fmt.Sprintf(`#!/bin/bash
+# Watchtower EDR Linux Installer
+
+SERVER_URL="https://%s"
+TOKEN="%s"
+CERT_PEM='%s'
+
+if [[ $EUID -ne 0 ]]; then
+   echo "This script must be run as root" 
+   exit 1
+fi
+
+echo "--- Watchtower EDR Deployment ---"
+
+# 1. Cleanup existing instance
+if systemctl is-active --quiet watchtower-agent; then
+    echo "[*] Stopping existing agent..."
+    systemctl stop watchtower-agent
+fi
+
+if [ -f "/etc/systemd/system/watchtower-agent.service" ]; then
+    systemctl disable watchtower-agent
+    rm -f /etc/systemd/system/watchtower-agent.service
+fi
+
+# 2. Setup Environment
+INSTALL_DIR="/usr/local/bin"
+CONF_DIR="/etc/watchtower"
+mkdir -p $CONF_DIR
+echo "$CERT_PEM" > "$CONF_DIR/server.crt"
+
+# 3. Download Agent Binary
+echo "[*] Downloading agent from $SERVER_URL..."
+curl -L "$SERVER_URL/api/v1/download/agent-linux" -o "$INSTALL_DIR/watchtower-agent"
+chmod +x "$INSTALL_DIR/watchtower-agent"
+
+# 4. Create Systemd Service
+cat <<EOF > /etc/systemd/system/watchtower-agent.service
+[Unit]
+Description=Watchtower EDR Agent
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=$INSTALL_DIR/watchtower-agent -url $SERVER_URL -token $TOKEN
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# 5. Start Service
+echo "[*] Starting Watchtower service..."
+systemctl daemon-reload
+systemctl enable watchtower-agent
+systemctl start watchtower-agent
+
+echo "[+] Installation Complete."
+`, fqdn, token, certPEM)
 }

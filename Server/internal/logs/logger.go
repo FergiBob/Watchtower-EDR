@@ -4,6 +4,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"gopkg.in/natefinch/lumberjack.v2"
@@ -22,9 +23,13 @@ var (
 	Map   *slog.Logger // CVE/CPE correlation alerts
 )
 
-func InitLogger() {
+var filePath string
+
+func InitLogger(baseDir string) {
+
+	filePath = filepath.Join(baseDir, "internal", "data", "logs", "watchtower.log")
 	file := &lumberjack.Logger{
-		Filename:   "./internal/logs/watchtower.log",
+		Filename:   filePath,
 		MaxSize:    50,
 		MaxBackups: 8,
 		Compress:   true,
@@ -58,7 +63,7 @@ func InitLogger() {
 }
 
 func GetTailLogs(lineCount int) (string, error) {
-	content, err := os.ReadFile("./internal/logs/watchtower.log")
+	content, err := os.ReadFile(filePath)
 	if err != nil {
 		return "", err
 	}

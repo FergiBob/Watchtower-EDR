@@ -1,0 +1,396 @@
+/* Specific styles for the asset pages (agents, software inventory, vulnerability management) */
+
+.inventory-list-container {
+    margin-top: 25px;
+}
+
+/* Create separation between rows */
+.separated-rows {
+    border-collapse: separate; 
+    border-spacing: 0 12px; /* This creates the vertical gap between rows */
+    width: 100%;
+}
+
+/* Ensure sort links inherit the header text color and remove underline */
+.sort-link {
+    text-decoration: none;
+    color: inherit; /* Takes the color from the parent TH */
+    display: block;
+    text-align: center;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+}
+
+.sort-link:hover {
+    color: var(--accent-primary);
+}
+
+/* Fix for right-aligned Action header */
+th:last-child .sort-link {
+    justify-content: flex-end;
+}
+
+.inventory-row td {
+    background-color: var(--bg-surface); /* Uses your card color */
+    padding: 18px 15px; /* Increased padding to reduce crowding */
+    border-top: 1px solid var(--border-color);
+    border-bottom: 1px solid var(--border-color);
+    vertical-align: middle;
+}
+
+/* Rounding the corners of individual rows */
+.inventory-row td:first-child {
+    border-left: 1px solid var(--border-color);
+    border-top-left-radius: 6px;
+    border-bottom-left-radius: 6px;
+}
+
+.inventory-row td:last-child {
+    border-right: 1px solid var(--border-color);
+    border-top-right-radius: 6px;
+    border-bottom-right-radius: 6px;
+}
+
+/* Styling the text elements for readability */
+.inventory-title {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--accent-primary); /* Pulls attention to the name */
+}
+
+.vendor-tag {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.cpe-link {
+    background: var(--bg-secondary);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: monospace;
+    color: var(--text-primary);
+}
+
+.bi-patch-check-fill {
+    cursor: help;
+    font-size: 1.1rem;
+}
+
+.unmapped-text {
+    font-size: 0.8rem;
+    color: #64748b;
+    font-style: italic;
+}
+
+/* Container for the action button */
+.action-dropdown {
+    position: relative;
+    display: inline-block;
+}
+
+/* The actual menu */
+.action-menu-content {
+    display: none;
+    position: absolute;
+    right: 0;
+    top: calc(100% + 5px);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    min-width: 160px;
+    box-shadow: 0 8px 20px rgba(0,0,0,0.4);
+    z-index: 1000;
+    overflow: hidden;
+}
+
+.action-menu-content.show {
+    display: block;
+    animation: menuFadeIn 0.15s ease-out;
+}
+
+/* Menu items */
+.action-menu-content a, 
+.action-menu-content button {
+    display: block;
+    width: 100%;
+    padding: 10px 15px;
+    color: var(--text-primary);
+    text-decoration: none;
+    font-size: 0.85rem;
+    background: none;
+    border: none;
+    text-align: left;
+    cursor: pointer;
+    transition: background var(--transition-fast);
+}
+
+.action-menu-content a:hover, 
+.action-menu-content button:hover {
+    background: var(--accent-soft);
+}
+
+.menu-divider {
+    height: 1px;
+    background: var(--border-color);
+    margin: 4px 0;
+}
+
+.menu-danger {
+    color: #ef4444 !important;
+}
+
+@keyframes menuFadeIn {
+    from { opacity: 0; transform: translateY(-5px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* Modal Overlay */
+.modal-overlay {
+    display: none; /* Hidden by default */
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0, 0, 0, 0.7);
+    z-index: 2000;
+    justify-content: center;
+    align-items: center;
+}
+
+.modal-overlay.active {
+    display: flex !important; 
+}
+
+/* Modal Content Box */
+.custom-modal {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    width: 90%;
+    max-width: 1300px;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 20px 40px rgba(0,0,0,0.6);
+}
+
+.modal-header {
+    padding: 15px 20px;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.modal-header h3 { margin: 0; font-size: 1.2rem; }
+
+.close-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 2rem;
+    cursor: pointer;
+}
+
+.modal-body {
+    padding: 20px;
+    overflow-y: auto;
+}
+
+.modal-footer {
+    padding: 15px 20px;
+    border-top: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+}
+
+/* --- Modal Specific Table Styling --- */
+/* This only affects the table inside the CPE Modal */
+.modal-table {
+    margin: 10px 0;
+    padding: 5px; /* Slight inset for the table itself */
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-card);
+}
+
+.modal-table .data-table td, 
+.modal-table .data-table th {
+    padding: 6px 18px; /* Increased vertical (16px) and horizontal (20px) padding */
+    line-height: 1.2;    /* Improves readability of multi-line URIs */
+    vertical-align: middle;
+}
+
+/* Column Widths for the Modal Table */
+.modal-table .data-table th:nth-child(1), 
+.modal-table .data-table td:nth-child(1) { width: 18%; } /* Product */
+
+.modal-table .data-table th:nth-child(2), 
+.modal-table .data-table td:nth-child(2) { width: 15%; } /* Vendor */
+
+.modal-table .data-table th:nth-child(3), 
+.modal-table .data-table td:nth-child(3) { width: 10%; } /* Version */
+
+.modal-table .data-table th:nth-child(4), 
+.modal-table .data-table td:nth-child(4) { 
+    width: 40%; 
+    word-break: break-all; /* Prevents long CPE URIs from expanding the table */
+    font-family: 'Courier New', monospace;
+    font-size: 0.85rem;
+    color: var(--accent-primary);
+}
+
+.modal-table .data-table th:nth-child(5), 
+.modal-table .data-table td:nth-child(5) { width: 10%; text-align: right; } /* Action */
+
+/* --- Search Row Layout --- */
+/* Use this to keep the 3 inputs and button in one tidy row */
+.modal-search-row {
+    display: flex;
+    gap: 12px;
+    align-items: flex-end;
+    margin-bottom: 15px;
+    padding: 10px;
+    background: var(--bg-input);
+    border-radius: 8px;
+}
+
+.modal-search-row .form-group {
+    flex: 1;
+}
+
+.modal-table .data-table td:first-child,
+.modal-table .data-table th:first-child {
+    padding-left: 25px; 
+}
+
+.modal-table .data-table td:last-child,
+.modal-table .data-table th:last-child {
+    padding-right: 25px;
+}
+
+.modal-table .data-table tbody tr:hover {
+    background-color: rgba(255, 255, 255, 0.03);
+    transition: background-color 0.2s ease;
+}
+
+.badge-version {
+    padding: 4px 8px;
+    margin-left: 4px;
+}
+
+.modal-grid {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr;
+    gap: 2rem;
+}
+
+.data-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px solid #eee;
+    font-size: 0.9rem;
+}
+
+.status-indicator {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 8px;
+}
+
+.dot {
+    height: 10px;
+    width: 10px;
+    border-radius: 50%;
+}
+.dot-online { background-color: #0acf35; box-shadow: 0 0 5px #2ecc71; }
+.dot-offline { background-color: #ffc400; }
+.dot-decom { background-color: #e93306;}
+
+
+.dot-open { background-color: #ff4d4d; }           
+.dot-in-progress { background-color: #ff9800; }    
+.dot-resolved { background-color: #28a745; }       
+.dot-risk-accepted { background-color: #9c27b0; }  
+.dot-false-positive { background-color: #607d8b; } 
+
+.time-footer {
+    margin-top: 1.5rem;
+    display: flex;
+    justify-content: space-between;
+    background: var(--bg-card);
+    padding: 10px;
+    border-radius: 4px;
+}
+
+.time-block label {
+    display: block;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    color: #888;
+}
+
+.badge-category { background: #e8f4fd; color: #2980b9; border: 1px solid #d0e7f9; }
+.badge-none { background: #f5f5f5; color: #999; border: 1px solid #eee; font-style: italic; }
+
+#editDescription.form-input {
+    background-color: var(--bg-input);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    max-width: 100%;
+}
+
+/* Fix the white-on-white visibility in the system context section */
+.tech-data {
+    background: var(--bg-secondary) !important;
+    color: var(--text-primary) !important;
+}
+
+.agent-metadata {
+    max-width: 100%
+}
+
+.time-block {
+    background: transparent !important; /* Remove white background */
+    padding: 5px;
+}
+
+.time-block span {
+    color: var(--text-primary) !important; /* Ensure text is readable */
+}
+
+.severity-badge {
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: bold;
+    text-transform: uppercase;
+    display: inline-block;
+    min-width: 80px;
+    text-align: center;
+}
+.sev-CRITICAL { background: #7a0000; color: #ff9999; border: 1px solid #ff0000; }
+.sev-HIGH { background: #4a1a00; color: #ffb380; border: 1px solid #ff6600; }
+.sev-MEDIUM { background: #4a4a00; color: #ffff99; border: 1px solid #cccc00; }
+.sev-LOW { background: #002b00; color: #99ff99; border: 1px solid #008000; }
+
+.pill-1{
+    background: var(--bg-secondary);
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-family: monospace;
+    border: 1px solid var(--border-color);
+    font-weight: bold;
+}
+
+.pill-2 {
+    background: var(--accent-soft);
+    color: var(--text-primary);
+    padding: 5px 15px;
+    border-radius: 50px;
+    font-weight: bold;
+    font-size: 0.85rem;
+}

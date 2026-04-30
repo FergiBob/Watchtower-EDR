@@ -1,24 +1,50 @@
 {{ define "content"}}
 <div class="tile-grid">
+    <!-- Agents Tile -->
     <div class="tile">
         <h3>Agents</h3>
         <p class="big-number">{{ .AgentCount }}</p>
-        <a href="/agents">View All →</a>
+        <div class="sub-info">
+            <div class="sub-row">
+                <span>Active</span>
+                <strong>{{.ActiveCount}}</strong>
+            </div>
+            <div class="sub-row">
+                <span>Offline</span>
+                <strong>{{.OfflineCount}}</strong>
+            </div>
+        </div>
+        <a href="/agents" class="view-link">View All →</a>
     </div>
-    <div class="tile">
-        <h3>Stale Agents</h3>
-        <p class="big-number">{{ .OfflineCount }}</p>
-        <a href="/agents">View All →</a>
-    </div>
+
+    <!-- Vulnerabilities Tile -->
     <div class="tile">
         <h3>Vulnerabilities</h3>
         <p class="big-number">{{ .VulnerabilityCount }}</p>
-        <a href="/reports">View All →</a>
+        <div class="sub-info">
+            <div class="sub-row">
+                <span>Open</span>
+                <strong class="text-danger">{{.VulnerabilityOpen}}</strong>
+            </div>
+            <div class="sub-row">
+                <span>In-Progress</span>
+                <strong class="text-warning">{{.VulnerabilityProgress}}</strong>
+            </div>
+        </div>
+        <a href="/reports" class="view-link">View All →</a>
     </div>
+
+    <!-- Software Tile -->
     <div class="tile">
         <h3>Software</h3>
         <p class="big-number">{{ .SoftwareCount }}</p>
-        <a href="/reports">View All →</a>
+        <div class="sub-info">
+            <div class="sub-row">
+                <span>Tracked Packages</span>
+                <strong>{{ .SoftwareCount }}</strong>
+            </div>
+        </div>
+        <a href="/software" class="view-link">View All →</a>
     </div>
 </div>
 

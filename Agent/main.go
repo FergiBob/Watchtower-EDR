@@ -1,68 +1,97 @@
 package main
 
 import (
-	"fmt"
+	"flag"
 	"log/slog"
 	"os"
+	"path/filepath"
 
 	"Watchtower_EDR/agent/internal"
+
+	"github.com/kardianos/service" // Add this
 )
 
+// Define a structure to represent the service
+type program struct {
+	serverURL string
+	token     string
+}
+
+// Start is called by the service manager when the service starts
+func (p *program) Start(s service.Service) error {
+	// Run our agent logic in a background goroutine so Start returns immediately
+	go p.runAgent()
+	return nil
+}
+
+func (p *program) Stop(s service.Service) error {
+	return nil
+}
+
 func main() {
+	// 1. Setup environment
+	exePath, _ := os.Executable()
+	os.Chdir(filepath.Dir(exePath))
+
+	serverURLFlag := flag.String("url", "", "Server URL")
+	tokenFlag := flag.String("token", "", "Enrollment Token")
+	flag.Parse()
+
 	internal.InitLogger()
 
-	// Initialize configuration
-	err := internal.InitConfig()
+	// 2. Setup Service Config
+	svcConfig := &service.Config{
+		Name:        "WatchtowerAgent",
+		DisplayName: "Watchtower EDR Agent",
+		Description: "Watchtower Endpoint Detection and Response Agent",
+	}
+
+	prg := &program{
+		serverURL: *serverURLFlag,
+		token:     *tokenFlag,
+	}
+
+	s, err := service.New(prg, svcConfig)
 	if err != nil {
-		slog.Error("Failed to load configuration file", "error", err, "action", "Exiting")
+		slog.Error("Failed to create service", "error", err)
 		os.Exit(1)
 	}
 
+	// 3. Run the service (This blocks until the service is stopped)
+	err = s.Run()
+	if err != nil {
+		slog.Error("Service failed to run", "error", err)
+	}
+}
+
+func (p *program) runAgent() {
+	// Initialize internal systems
+	if err := internal.InitConfig(); err != nil {
+		slog.Error("Config init failed", "error", err)
+		return
+	}
 	if err := internal.InitSecureClient(); err != nil {
-		slog.Error("Failed to initialize secure client", "error", err)
-		os.Exit(1)
+		slog.Error("Secure client init failed", "error", err)
+		return
 	}
 
-	// Define your server URL (usually this would be in your config.json too)
-	serverURL := "https://localhost:443" // Update to your actual server address
-	enrollmentToken := "WATCHTOWER_EDR_SECRET_!"
-
-	// Enrollment: Check if we already have an AgentID
 	cfg := internal.AppConfig().Get()
-	agentIDStr := ""
+	agentIDStr := cfg.AgentID
 
-	if cfg.AgentID == "" {
-		slog.Info("No AgentID found. Starting enrollment...")
-		newID, err := internal.HelloPacket(serverURL, enrollmentToken)
+	if agentIDStr == "" {
+		slog.Info("Starting enrollment...")
+		newID, err := internal.HelloPacket(p.serverURL, p.token)
 		if err != nil {
 			slog.Error("Enrollment failed", "error", err)
-			os.Exit(1)
+			return
 		}
-
-		// Update local config so we don't re-enroll next time
-		// Note: helloPacket returns a string, but your Config struct uses an int.
-		// If your server uses UUIDs, you should change Config.AgentID to a string.
-		slog.Info("Enrollment successful", "new_id", newID)
-
-		// For this example, we assume your server returns a numeric ID.
-		// If it's a UUID, update your internal.Config struct to use a string!
-		cfg.AgentID = newID // Replace with parsed newID
-		internal.AppConfig().Update(cfg)
 		agentIDStr = newID
-	} else {
-		// Convert int to string for comms functions
-		agentIDStr = fmt.Sprintf("%d", cfg.AgentID)
-		slog.Info("Agent starting with existing ID", "agent_id", cfg.AgentID)
+		cfg.AgentID = newID
+		internal.AppConfig().Update(cfg)
 	}
 
-	// Initial Software Inventory Sync
-	slog.Info("Sending initial software telemetry...")
-	err = internal.UploadSoftware(serverURL, agentIDStr)
-	if err != nil {
-		slog.Warn("Initial software sync failed", "error", err)
-	}
-
-	// Start the Heartbeat loop (this is a blocking call in your current code)
-	slog.Info("Starting heartbeat loop...")
-	internal.Heartbeat(serverURL, agentIDStr)
+	// Start your loops
+	go internal.Heartbeat(p.serverURL, agentIDStr, p.token)
+	go internal.StartSoftwareScheduler(p.serverURL, agentIDStr)
+	go internal.StartOSScheduler(p.serverURL, agentIDStr)
 }

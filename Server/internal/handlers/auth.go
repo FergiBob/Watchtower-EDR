@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -30,6 +31,13 @@ type LoginPageData struct {
 type Claims struct {
 	Username string `json:"username"`
 	jwt.RegisteredClaims
+}
+
+type User struct {
+	ID        string `json:"id"`
+	Username  string `json:"username"`
+	Email     string `json:"email"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 // Helper function to generate a secure random string
@@ -74,7 +82,7 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 
 	var storedHash string
 	// Searches for password hash tied to provided username and stores it in "storedHash"
-	err := data.User_Database.QueryRow("SELECT password_hash FROM users WHERE username = ?", username).Scan(&storedHash)
+	err := data.User_Database.QueryRow("SELECT password_hash FROM users WHERE LOWER(username) = LOWER(?)", username).Scan(&storedHash)
 
 	// Handles errors for password hash query involving the username
 	if err != nil {
@@ -193,6 +201,118 @@ func GetUsernameFromToken(r *http.Request) (string, error) {
 
 	logs.Sys.Warn("Invalid token claims structure", "remote_addr", r.RemoteAddr)
 	return "", fmt.Errorf("invalid claims")
+}
+
+func GetUserByUsername(username string) (User, error) {
+	var user User
+	user.Username = username
+
+	// Use & (pointers) so the DB driver can modify the struct fields
+	err := data.QuerySingleRow(
+		data.User_Database,
+		"SELECT id, IFNULL(email, ''), updated_on FROM users WHERE username = ?",
+		[]any{username},
+		&user.ID,
+		&user.Email,
+		&user.UpdatedAt,
+	)
+
+	if err != nil {
+		// It is better to return an error so the handler knows if the user exists
+		return user, err
+	}
+
+	return user, nil
+}
+
+func updateUserInformation(w http.ResponseWriter, r *http.Request, username string) {
+	var updateReq struct {
+		Username string `json:"username"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&updateReq); err != nil {
+		logs.Sys.Error("Failed to decode user update JSON", "error", err)
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// --- VALIDATION ---
+	if updateReq.Email == "" {
+		http.Error(w, "Email cannot be empty", http.StatusBadRequest)
+		return
+	}
+
+	if len(updateReq.Username) < 4 || len(updateReq.Username) > 16 {
+		http.Error(w, "Username must be between 4 and 16 characters long", http.StatusBadRequest)
+	}
+
+	var query string
+	var args []any
+
+	if updateReq.Password != "" {
+		// Enforce a minimum password length before hashing
+		if len(updateReq.Password) < 8 {
+			http.Error(w, "Password must be at least 8 characters", http.StatusBadRequest)
+			return
+		}
+
+		hashedPassword, err := HashPassword(updateReq.Password)
+		if err != nil {
+			logs.Sys.Error("Failed to hash password", "error", err)
+			http.Error(w, "Internal error", 500)
+			return
+		}
+		query = "UPDATE users SET username = ?, email = ?, password_hash = ?, updated_on = CURRENT_TIMESTAMP WHERE username = ?"
+		args = []any{updateReq.Username, updateReq.Email, hashedPassword, username}
+	} else {
+		query = "UPDATE users SET username = ?, email = ?, updated_on = CURRENT_TIMESTAMP WHERE username = ?"
+		args = []any{updateReq.Username, updateReq.Email, username}
+	}
+
+	result, err := data.User_Database.Exec(query, args...)
+	if err != nil {
+		logs.DB.Error("Update failed", "error", err, "username", username)
+		http.Error(w, "Database error", 500)
+		return
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		http.Error(w, "No changes made", http.StatusNotFound)
+		return
+	}
+
+	if updateReq.Username != username {
+		// 1. Clear the session token cookie
+		http.SetCookie(w, &http.Cookie{
+			Name:     "session_token",
+			Value:    "",
+			Path:     "/",
+			MaxAge:   -1,
+			HttpOnly: true,
+			Expires:  time.Unix(0, 0),
+		})
+
+		// 2. Clear the CSRF token cookie
+		http.SetCookie(w, &http.Cookie{
+			Name:     "csrf_token",
+			Value:    "",
+			Path:     "/",
+			MaxAge:   -1,
+			HttpOnly: false,
+			Expires:  time.Unix(0, 0),
+		})
+
+		// 3. Return redirect header for frontend to handle
+		w.Header().Set("X-Redirect", "/login")
+		w.WriteHeader(http.StatusOK) // Use 200 so the frontend fetch is 'ok'
+		return
+	}
+
+	logs.Audit.Info("User profile updated", "username", username)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // authMiddleware checks for a valid JWT in cookies

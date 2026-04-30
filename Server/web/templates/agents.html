@@ -1,0 +1,226 @@
+{{define "content"}}
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+
+<div class="inventory-page"> 
+    <div class="page-header" style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px;">
+        <div class="title-group">
+            <h1>Agent Inventory{{if or .SoftwareName}}: {{.SoftwareName}}{{end}}</h1>
+            <br>
+        </div>
+        
+        <div class="header-button-group">
+            <button class="btn-primary" onclick="openAddAgentModal()">
+                <i class="bi bi-plus-lg"></i> Add Agents
+            </button>
+        </div>
+    </div>
+    <div class="boxed-content">
+        <form method="GET" action="/agents">
+            <div style="display: flex; gap: 20px; align-items: flex-end; flex-wrap: wrap;">
+                <div class="form-group" style="flex: 2; min-width: 300px;">
+                    <label>Search Assets</label>
+                    <input type="text" name="search" value="{{.SearchTerm}}" placeholder="Search hostname, IP, or OS...">
+                </div>
+
+                <div class="form-group" style="flex: 1; min-width: 150px;">
+                    <label>Filter by Category</label>
+                    <select name="category" onchange="this.form.submit()">
+                        <option value="">All Categories</option>
+                        {{range .Categories}}
+                        <option value="{{.}}" {{if eq . $.SelectedCategory}}selected{{end}}>{{.}}</option>
+                        {{end}}
+                    </select>
+                </div>
+
+                <div class="form-group" style="flex: 1; min-width: 150px;">
+                    <label>Status</label>
+                    <select name="status" onchange="this.form.submit()">
+                        <option value="">All Statuses</option>
+                        <option value="active" {{if eq "active" $.SelectedStatus}}selected{{end}}>Active</option>
+                        <option value="offline" {{if eq "offline" $.SelectedStatus}}selected{{end}}>Offline</option>
+                        <option value="decomissioned" {{if eq "decomissioned" $.SelectedStatus}}selected{{end}}>Decommissioned</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div style="margin-top: 15px; display: flex; gap: 10px;">
+                <button type="submit" class="btn-primary"><i class="bi bi-search">&nbsp; Search</i></button>
+                {{if or .SearchTerm .SelectedCategory .SelectedStatus .SoftwareName}}
+                    <a href="/agents" class="btn-secondary" style="text-decoration: none; padding: 10px 20px;">Clear Filters</a>
+                {{end}}
+            </div>
+        </form>
+    </div>
+
+    <div class="inventory-list-container"> <table class="data-table separated-rows">
+            <thead>
+                <tr>
+                    <th style="text-align: left;">Hostname</th>
+                    <th>IP Address</th>
+                    <th >OS Name</th>
+                    <th>Category</th>
+                    <th style="text-align: center;">Status</th>
+                    <th style="text-align: right;">Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .Agents}}
+                <tr class="inventory-row"> <td class="primary-cell">
+                        <span class="inventory-title">{{.Hostname}}</span>
+                    </td>
+                    <td style="text-align: center;"><code class="ip-addr">{{.IPAddress}}</code></td>
+                    <td style="text-align: center;">{{.OSName}}</td>
+                    <td style="text-align: center;">
+                        {{if .Category}}
+                            <span class="vendor-tag">{{.Category}}</span>
+                        {{else}}
+                            <span class="unmapped-text" style="color: #6c757d; font-style: italic;">Uncategorized</span>
+                        {{end}}
+                    </td>
+                    <td>
+                        <div class="status-indicator">
+                            <span class="dot {{if eq .Status "active"}}dot-online{{else if eq .Status "offline"}}dot-offline{{else}}dot-decom{{end}}"></span>
+                            <span class="status-text" style="text-transform: capitalize;">{{.Status}}</span>
+                        </div>
+                    </td>
+                    <td style="text-align: right;">
+                        <button class="btn-hollow btn-small" onclick="openAgentModal('{{.AgentID}}')">
+                            Details
+                        </button>
+                    </td>
+                </tr>
+                {{else}}
+                <tr>
+                    <td colspan="6" class="empty-state text-center py-5" style="text-align: center; padding: 40px; color: #888;">
+                        No agents match your current filters.
+                    </td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div id="agentModal" class="modal-overlay">
+    <div class="custom-modal wide">
+        <div class="modal-header">
+            <div>
+                <h2 id="m-hostname" style="margin:0;">Hostname</h2>
+                <span id="m-agent-id" class="sub-id" style="font-size: 0.8rem; color: var(--text-muted);"></span>
+            </div>
+            <button class="close-btn" onclick="closeAgentModal()">&times;</button>
+        </div>
+        
+        <div class="modal-body">
+            <div class="modal-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                <div class="modal-section agent-metadata">
+                    <h3><i class="bi bi-gear me-2"></i>Inventory Management</h3>
+                    <div class="form-group">
+                        <label>Category</label>
+                        <input type="text" id="editCategory" class="form-input" placeholder="e.g. Server, Workstation">
+                    </div>
+                    <div class="form-group">
+                        <label>Description</label>
+                        <textarea id="editDescription" class="form-input" rows="5" placeholder="Operational notes..."></textarea>
+                    </div>
+                    <button class="btn-primary" id="saveAgentBtn" style="margin-top: 10px;">Save Changes</button>
+                </div>
+
+                <div class="modal-section tech-data" style="background: var(--bg-secondary); padding: 15px; border-radius: 8px;">
+                    <h3><i class="bi bi-info-circle me-2"></i>System Context</h3>
+                    <div class="data-row" style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                        <span>IP Address</span><strong id="m-ip"></strong>
+                    </div>
+
+                    <div class="data-row" style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                        <span>OS Name</span><span id="m-os-name"></span>
+                    </div>
+                    <div class="data-row" style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                        <span>OS Version</span><span id="m-os-ver"></span>
+                    </div>
+                    <div class="data-row" style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                        <span>OS Build</span><span id="m-os-build"></span>
+                    </div>
+                    <div class="data-row" style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                        <span>OS CPE</span><code id="m-os-cpe"></code>
+                    </div>
+                    <div class="data-row" style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                        <span>Binary Ver</span><span id="m-binary"></span>
+                    </div>
+                    
+                    <div class="time-footer" style="margin-top: 20px; border-top: 1px solid var(--border-color); padding-top: 10px; display: flex; gap: 20px;">
+                        <div class="time-block">
+                            <label style="display:block; font-size: 0.7rem; color: var(--text-muted);">First Seen</label>
+                            <span id="m-first-seen" style="font-size: 0.85rem;"></span>
+                        </div>
+                        <div class="time-block">
+                            <label style="display:block; font-size: 0.7rem; color: var(--text-muted);">Last Seen</label>
+                            <span id="m-last-seen" style="font-size: 0.85rem;"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="modal-footer">
+            <button class="btn-warning" onclick="closeAgentModal()">Close</button>
+            <button class="btn-danger modal-danger-btn" id="decomBtn">Decommission Agent</button>
+        </div>
+    </div>
+</div>
+
+<div id="addAgentModal" class="modal-overlay" style="display:none;">
+    <div class="modal-content boxed-content" style="max-width: 500px;">
+        <div class="modal-header">
+            <h2>Deploy New Agent</h2>
+            <button class="close-btn" onclick="closeAddAgentModal()">&times;</button>
+        </div>
+        <div class="modal-body" style="padding: 20px 0;">
+            <p class="subtitle" style="margin-bottom: 20px;">Select target operating system for the deployment script:</p>
+            
+            <div class="deployment-container" style="max-width: 600px; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;">
+    
+                <div class="os-card" style="background: #1e1e1e; border: 1px solid #333; border-radius: 8px; padding: 20px; margin-bottom: 20px; color: #e0e0e0;">
+                    <div style="display: flex; align-items: center; margin-bottom: 15px;">
+                        <i class="bi bi-windows" style="font-size: 1.5rem; color: #00a1f1; margin-right: 12px;"></i>
+                        <h5 style="margin: 0; font-weight: 600;">Windows Deployment</h5>
+                    </div>
+
+                    <p style="font-size: 0.9rem; color: #aaa; margin-bottom: 15px;">
+                        Deploy the Watchtower agent to Windows endpoints using our automated PowerShell installer.
+                    </p>
+
+                    <div style="background: #000; border-radius: 4px; padding: 12px; margin-bottom: 20px; position: relative;">
+                        <small style="display: block; color: #00ff41; margin-bottom: 5px; font-family: monospace;">ADMIN POWERSHELL COMMAND:</small>
+                        <code id="ps-command" style="color: #fff; font-size: 0.85rem; word-break: break-all;">powershell.exe -ExecutionPolicy Bypass -File .\install-watchtower.ps1</code>
+                    </div>
+
+                    <button id="btn-dl-windows" class="btn-hollow" onclick="downloadInstaller('windows')">
+                        <span>Download Installer (.ps1)</span>
+                        <i class="bi bi-download"></i>
+                    </button>
+                </div>
+
+                <div class="os-card disabled" style="background: #1e1e1e; border: 1px solid #333; border-radius: 8px; padding: 20px; opacity: 0.6; cursor: not-allowed;">
+                    <div style="display: flex; align-items: center; margin-bottom: 15px;">
+                        <i class="bi bi-terminal-fill" style="font-size: 1.5rem; color: #f04e23; margin-right: 12px;"></i>
+                        <h5 style="margin: 0; font-weight: 600; color: #e0e0e0;">Linux Deployment</h5>
+                        <span style="margin-left: auto; font-size: 0.7rem; background: #333; padding: 2px 8px; border-radius: 10px; color: #aaa;">SOON</span>
+                    </div>
+                    
+                    <button id="btn-dl-linux" class="btn-hollow" style="pointer-events: none; background: #2a2a2a; color: #555; border-color: #333;" disabled>
+                        <span>Linux Shell Script (.sh)</span>
+                        <i class="bi bi-download"></i>
+                    </button>
+                </div>
+            </div>
+            
+            <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 20px;">
+                <i class="bi bi-info-circle"></i> Scripts are pre-configured with your server's FQDN and enrollment token.
+            </p>
+        </div>
+    </div>
+</div>
+<script src="/public/js/agents.js"></script>
+{{ end }}

@@ -14,7 +14,7 @@ func InitLogger() {
 
 	// sets up the file properties in lumberjack
 	file := &lumberjack.Logger{
-		Filename:   "./internal/logs/agent.log",
+		Filename:   "internal/logs/agent.log",
 		MaxSize:    10, //MB
 		MaxBackups: 2,
 		MaxAge:     0,    //default (logs do not age out by days)

@@ -1,0 +1,190 @@
+{{ define "content" }}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+<div class="inventory-page">
+    <div class="page-header">
+        <h1>Software Inventory</h1>
+        <br>
+    </div>
+
+    <div class="boxed-content">
+        <form action="/software" method="GET">
+            <div class="form-group">
+                <label>Search Assets</label>
+                <input type="text" name="search" placeholder="Search by name, vendor, or CPE..." value="{{ .SearchTerm }}">
+            </div>
+            
+            <div class="form-group">
+                <label>Filter by Vendor</label>
+                <select name="vendor" onchange="this.form.submit()">
+                    <option value="">All Vendors</option>
+                    {{ range .Vendors }}
+                        <option value="{{ . }}" {{ if eq $.SelectedVendor . }}selected{{ end }}>{{ . }}</option>
+                    {{ end }}
+                </select>
+            </div>
+            
+            <div style="margin-top: 15px; display: flex; gap: 10px;">
+                <button type="submit" class="btn-primary"><i class="bi bi-search">&nbsp; Search</i></button>
+                {{if or .SearchTerm .SelectedVendor}}
+                    <a href="/software" class="btn-secondary" style="text-decoration: none; padding: 10px 20px;">Clear Filters</a>
+                {{end}}
+            </div>
+        </form>
+    </div>
+
+    <div class="inventory-list-container">
+        <table class="data-table separated-rows">
+            <thead>
+                <tr>
+                    <th>
+                        <a href="?search={{.SearchTerm}}&vendor={{.SelectedVendor}}&sort=name&dir={{if eq .SortBy "name"}}{{if eq .SortDir "asc"}}desc{{else}}asc{{end}}{{else}}asc{{end}}" class="sort-link" style="text-align: left;">
+                            Software Name {{if eq .SortBy "name"}}{{if eq .SortDir "asc"}}▲{{else}}▼{{end}}{{end}}
+                        </a>
+                    </th>
+                    <th>
+                        <a href="?search={{.SearchTerm}}&vendor={{.SelectedVendor}}&sort=vendor&dir={{if eq .SortBy "vendor"}}{{if eq .SortDir "asc"}}desc{{else}}asc{{end}}{{else}}asc{{end}}" class="sort-link" style="text-align: left;">
+                            Vendor {{if eq .SortBy "vendor"}}{{if eq .SortDir "asc"}}▲{{else}}▼{{end}}{{end}}
+                        </a>
+                    </th>
+                    <th style="text-align: left;">Version</th>
+                    <th style="text-align: center;">
+                        <a href="?search={{.SearchTerm}}&vendor={{.SelectedVendor}}&sort=installs&dir={{if eq .SortBy "installs"}}{{if eq .SortDir "asc"}}desc{{else}}asc{{end}}{{else}}desc{{end}}" class="sort-link">
+                            Installs {{if eq .SortBy "installs"}}{{if eq .SortDir "asc"}}▲{{else}}▼{{end}}{{end}}
+                        </a>
+                    </th>
+                    <th>CPE URI</th>
+                    <th style="text-align: right;">Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{ range .SoftwareList }}
+                <tr class="inventory-row">
+                    <td class="primary-cell">
+                        <span class="inventory-title">{{ .Name }}</span>
+                    </td>
+                    <td><span class="vendor-tag">{{ .Vendor }}</span></td>
+                    <td><span class="pill-1">{{ .Version }}</span></td>
+                    <td style="text-align: center; padding-right: .5wv;">
+                        <span class="pill-2">{{ .InstallCount }}</span>
+                    </td>
+                    <td style="padding-left: 5%;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            {{ if .CPE }}
+                                <code class="cpe-link">{{ .CPE }}</code>
+                                
+                                {{ if .ManuallyMapped }}
+                                    <i class="bi bi-patch-check-fill" 
+                                    style="color: #50fa7b;" 
+                                    title="Manually Verified Mapping"></i>
+                                {{ end }}
+
+                            {{ else }}
+                                <span class="unmapped-text" style="color: #6c757d; font-style: italic;">
+                                    <i class="bi bi-exclamation-triangle-fill" style="color: #ffb86c; margin-right: 4px;"></i>
+                                    No Mapping
+                                </span>
+                            {{ end }}
+                        </div>
+                    </td>
+                    <td style="text-align: right;">
+                        <div class="action-dropdown">
+                            <button class="btn-hollow btn-small" type="button" onclick="toggleActionMenu(this, event)">
+                                Actions
+                            </button>
+                            <ul class="action-menu-content">
+                                <li>
+                                    <a class="dropdown-item" href="/agents?software_id={{.ID}}">
+                                        <i class="bi bi-people me-2"></i>&nbsp; View Agents
+                                    </a>
+                                </li>
+                                
+                                <li>
+                                    <button class="dropdown-item" type="button" 
+                                            onclick="openCPEModal('{{.ID}}', '{{.Name}}', '{{.Vendor}}', '{{.Version}}')">
+                                        <i class="bi bi-search me-2"></i>&nbsp; Map CPE
+                                    </button>
+                                </li>
+                            
+                            </ul>
+                        </div>
+                    </td>
+                </tr>
+                {{ else }}
+                <tr>
+                    <td colspan="6" class="empty-state text-center py-5">No software found matching your criteria.</td>
+                </tr>
+                {{ end }}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div id="cpeModalOverlay" class="modal-overlay">
+    <div class="custom-modal">
+        <div class="modal-header" style="display: flex; justify-content: space-between; align-items: flex-start;">
+            <div style="display: flex; flex-direction: column;">
+                <h3 style="margin: 0;"><i class="bi bi-link-45deg me-2"></i>&nbsp; Map CPE:</h3>
+                <span class="field-help" id="modalSwName" style="margin-top: 5px; display: block;"></span>
+            </div>
+            <button type="button" class="close-btn" onclick="closeCPEModal()">&times;</button>
+        </div>
+        
+        <div class="modal-body">
+            <div class="search-section" style="margin-bottom: 20px; background: var(--bg-input); padding: 15px; border-radius: 8px;">
+                <label class="field-help" style="display:block; margin-bottom: 12px; font-weight: 600; color: var(--accent-primary);">
+                    Search Filters (Leave blank to broaden search)
+                </label>
+                
+                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 10px; align-items: end;">
+                    <div class="form-group">
+                        <label style="font-size: 0.75rem; color: var(--text-muted);">Product</label>
+                        <input type="text" id="cpeSearchProduct" class="form-input" placeholder="e.g. excel">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label style="font-size: 0.75rem; color: var(--text-muted);">Vendor</label>
+                        <input type="text" id="cpeSearchVendor" class="form-input" placeholder="e.g. microsoft">
+                    </div>
+
+                    <div class="form-group">
+                        <label style="font-size: 0.75rem; color: var(--text-muted);">Version (* and - are used for generic matches)</label>
+                        <input type="text" id="cpeSearchVersion" class="form-input" placeholder="e.g. 2016">
+                    </div>
+
+                    <button class="btn-primary" type="button" onclick="performCPESearch()" style="height: 38px; padding: 0 20px;">
+                        <i class="bi bi-search">&nbsp; Search</i>
+                    </button>
+                </div>
+            </div>
+
+
+            <div class="table-container modal-table" style="max-height: 400px; overflow-y: auto;">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Product</th>
+                            <th>Vendor</th>
+                            <th>Version</th>
+                            <th>CPE URI Identifier</th>
+                            <th style="text-align: right;">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="cpeResultsBody">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn-warning" onclick="closeCPEModal()">Close</button>
+            <button type="button" class="btn-danger modal-danger-btn" onclick="unbindCPE()" title="Mark as 'No CPE' and stop tracking">
+                <i class="bi bi-trash3"></i>&nbsp; Unbind Software
+            </button>
+            
+        </div>
+    </div>
+</div>
+
+<script src="/public/js/software.js"></script>
+
+
+{{ end }}

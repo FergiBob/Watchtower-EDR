@@ -7,6 +7,7 @@ import (
 	"Watchtower_EDR/server/internal/logs" // Updated to use the tiered logging system
 	"crypto/tls"
 	"net/http"
+	"path/filepath"
 	"time"
 )
 
@@ -85,17 +86,22 @@ func BuildServer() (*http.Server, error) {
 	mux.HandleFunc("POST /api/v1/agent/telemetry/os", HandleOSTelemetry)
 
 	// --- WEB UI PUBLIC ASSETS ---
-	fileServer := http.FileServer(http.Dir("./web/public"))
+	publicFolder := filepath.Join(internal.BaseDir, "web", "public")
+	fileServer := http.FileServer(http.Dir(publicFolder))
 	mux.Handle("/public/", http.StripPrefix("/public/", fileServer))
 
 	// Endpoint for Windows Agent download
 	mux.HandleFunc("/api/v1/download/agent-windows", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "./web/downloads/windows/agent-windows.exe")
+		// Construct absolute path relative to the binary location
+		filePath := filepath.Join(internal.BaseDir, "web", "downloads", "windows", "agent-windows.exe")
+		http.ServeFile(w, r, filePath)
 	})
 
 	// Endpoint for Linux Agent download
 	mux.HandleFunc("/api/v1/download/agent-linux", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "./web/downloads/linux/agent-linux")
+		// Construct absolute path relative to the binary location
+		filePath := filepath.Join(internal.BaseDir, "web", "downloads", "linux", "agent-linux")
+		http.ServeFile(w, r, filePath)
 	})
 
 	// --- WEB UI ROUTES ---
@@ -104,7 +110,11 @@ func BuildServer() (*http.Server, error) {
 
 	// Protected Routes via AuthMiddleware
 
+	mux.Handle("/api/v1/users/{username}", AuthMiddleware(http.HandlerFunc(UserResourceHandler)))
+
 	mux.Handle("/vulnerabilities", AuthMiddleware(http.HandlerFunc(VulnerabilitiesPageHandler)))
+	mux.Handle("/api/v1/vulnerabilities/{id}", AuthMiddleware(http.HandlerFunc(VulnerabilityResourceHandler)))
+	mux.Handle("/api/v1/vulnerabilities/scan", AuthMiddleware(http.HandlerFunc(ScanCVEs)))
 
 	mux.Handle("/settings", AuthMiddleware(http.HandlerFunc(settingsHandler)))
 	mux.Handle("/server/shutdown", AuthMiddleware(http.HandlerFunc(HandleShutdown)))
@@ -112,7 +122,7 @@ func BuildServer() (*http.Server, error) {
 	// Software web routes
 	mux.Handle("/software", AuthMiddleware(http.HandlerFunc(softwareHandler)))
 	mux.Handle("/api/cpe/search", AuthMiddleware(http.HandlerFunc(CPESearchHandler)))
-	mux.Handle("POST /api/software/{id}/map", AuthMiddleware(http.HandlerFunc(CPEMapHandler)))
+	mux.Handle("/api/software/{id}/cpe", AuthMiddleware(http.HandlerFunc(SoftwareCPEHandler)))
 
 	// Agents web routes
 	mux.Handle("GET /agents", AuthMiddleware(http.HandlerFunc(AgentsPageHandler)))

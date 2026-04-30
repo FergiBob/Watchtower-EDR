@@ -491,6 +491,32 @@ body.login-layout {
     font-weight: 600;
 }
 
+.sub-info {
+    margin-top: auto; /* Pushes the sub-info to the bottom above the link */
+    margin-bottom: 15px;
+}
+
+.sub-row {
+    display: flex;
+    justify-content: space-between; /* Pushes content to opposite ends */
+    align-items: center;
+    font-size: 0.9rem;
+    padding: 4px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.sub-row:last-child {
+    border-bottom: none;
+}
+
+.sub-row span {
+    color: var(--text-muted); /* Dimmer color for labels */
+}
+
+.sub-row strong {
+    color: var(--text-primary); /* Bright color for the numbers */
+}
+
 .status-pill {
     background: var(--success-soft);
     color: var(--success-text);
@@ -629,6 +655,22 @@ input[readonly] {
 
 .btn-secondary:hover {
     color: var(--text-primary);
+}
+
+.btn-hollow {
+    background-color: transparent;
+    border: 1px solid var(--accent-primary);
+    color: var(--accent-primary);
+    padding: 10px 20px;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    font-weight: 600;
+    transition: all 0.2s;
+}
+
+.btn-hollow:hover {
+    background-color: var(--accent-primary);
+    color: white;
 }
 
 /* --- Field Help Text --- */

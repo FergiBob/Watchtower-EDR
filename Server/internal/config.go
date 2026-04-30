@@ -5,13 +5,13 @@ package internal
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"Watchtower_EDR/server/internal/logs" // Import the new logging package
 
+	"github.com/thanhpk/randstr"
 	"gopkg.in/yaml.v3"
 )
-
-var configFile = "./internal/data/config.yaml"
 
 // struct for the configuration to be read from yaml file and used within the program
 type Config struct {
@@ -40,7 +40,27 @@ type Config struct {
 	} `yaml:"agents"`
 }
 
-var AppConfig Config
+var (
+	AppConfig  Config
+	BaseDir    string
+	configFile string // Don't initialize it here!
+)
+
+func SetupDirectory() {
+	exePath, err := os.Executable()
+	if err != nil {
+		os.Exit(1)
+	}
+
+	// 1. Set the BaseDir first
+	BaseDir = filepath.Dir(exePath)
+
+	// 2. NOW initialize the dependent paths
+	configFile = filepath.Join(BaseDir, "internal", "data", "config.yaml")
+
+	// 3. Change working directory
+	os.Chdir(BaseDir)
+}
 
 // SaveConfig writes config data to the config file (YAML)
 func SaveConfig(cfg Config) error {
@@ -62,6 +82,7 @@ func SaveConfig(cfg Config) error {
 
 // LoadConfig reads config data from the config file (YAML)
 func LoadConfig() {
+
 	// Check if file exists and creates it if not
 	if _, err := os.Stat(configFile); os.IsNotExist(err) {
 		logs.Sys.Warn("Config file not found, creating default config.yaml", "path", configFile)
@@ -87,6 +108,12 @@ func LoadConfig() {
 
 // createDefaultConfig populates a freshly created config.yaml with default information
 func createDefaultConfig(path string) {
+	err := os.MkdirAll(filepath.Dir(path), 0755)
+	if err != nil {
+		logs.Sys.Error("Failed to create data directory", "error", err)
+		return
+	}
+
 	defaultCfg := Config{}
 	defaultCfg.NVD.APIKey = "YOUR_API_KEY_HERE"
 	defaultCfg.NVD.CpeURL = "https://services.nvd.nist.gov/rest/json/cpes/2.0"
@@ -94,13 +121,13 @@ func createDefaultConfig(path string) {
 	defaultCfg.Server.FQDN = "watchtower.local"
 	defaultCfg.Server.ListenAddress = "0.0.0.0"
 	defaultCfg.UI.Theme = "orange"
-	defaultCfg.Database.MainDB = "./internal/data/main.db"
-	defaultCfg.Database.UserDB = "./internal/data/users.db"
-	defaultCfg.Database.CpeDB = "./internal/data/cpe.db"
-	defaultCfg.Database.CveDB = "./internal/data/cve.db"
+	defaultCfg.Database.MainDB = filepath.Join(BaseDir, "internal", "data", "main.db")
+	defaultCfg.Database.UserDB = filepath.Join(BaseDir, "internal", "data", "users.db")
+	defaultCfg.Database.CpeDB = filepath.Join(BaseDir, "internal", "data", "cpe.db")
+	defaultCfg.Database.CveDB = filepath.Join(BaseDir, "internal", "data", "cve.db")
 	defaultCfg.Agents.OfflineTimer = 60
 	defaultCfg.Agents.TelemetryFrequency = 5
-	defaultCfg.Agents.EnrollmentToken = "WATCHTOWER_EDR_SECRET"
+	defaultCfg.Agents.EnrollmentToken = randstr.String(16)
 
 	data, err := yaml.Marshal(&defaultCfg)
 	if err != nil {

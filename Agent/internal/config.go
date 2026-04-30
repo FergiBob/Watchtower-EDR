@@ -4,6 +4,7 @@ package internal
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -38,8 +39,11 @@ func InitConfig() error {
 	return nil
 }
 
-// AppConfig is the method that the rest of the application uses to reach the config
 func AppConfig() *SafeConfig {
+	// Safety check to prevent nil pointer panics
+	if globalCfg == nil {
+		_ = InitConfig()
+	}
 	return globalCfg
 }
 
@@ -60,15 +64,18 @@ func (s *SafeConfig) Update(newCfg Config) error {
 		return err
 	}
 
-	// Write to a temp file first
+	// 1. Try the atomic rename first (Best practice)
 	tmpPath := s.Path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return err
+	if err := os.WriteFile(tmpPath, data, 0644); err == nil {
+		if err := os.Rename(tmpPath, s.Path); err == nil {
+			s.Data = newCfg
+			return nil
+		}
 	}
 
-	// Rename is atomic on most OSs - it either works or it doesn't
-	if err := os.Rename(tmpPath, s.Path); err != nil {
-		return err
+	// 2. Fallback: If rename is blocked by Windows/VSCode, write directly to the file
+	if err := os.WriteFile(s.Path, data, 0644); err != nil {
+		return fmt.Errorf("failed to write config file: %w", err)
 	}
 
 	s.Data = newCfg
@@ -89,7 +96,8 @@ func LoadConfig() (*SafeConfig, error) {
 
 	file, err := os.ReadFile(path)
 	if err != nil {
-		// If file doesn't exist, return a default config
+		// If file doesn't exist, return a default config with the path set
+		// This is important: if Path is empty, Update() will fail later
 		return &SafeConfig{Data: Config{UploadFreq: 60}, Path: path}, nil
 	}
 
@@ -103,11 +111,9 @@ func LoadConfig() (*SafeConfig, error) {
 
 // Helper to find the absolute path relative to the .exe
 func findConfigPath() (string, error) {
-	exePath, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(filepath.Dir(exePath), "config.json"), nil
+	exePath, _ := os.Executable()
+	baseDir := filepath.Dir(exePath)
+	return filepath.Join(baseDir, "config.json"), nil
 }
 
 // getAgentID returns the agentID stored in the config file

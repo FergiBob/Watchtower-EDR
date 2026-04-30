@@ -6,102 +6,271 @@ import (
 	"Watchtower_EDR/server/internal/handlers"
 	"Watchtower_EDR/server/internal/logs"
 	"context"
+	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/windows/svc"
 )
 
-func main() {
-	// Configures the system logger
-	logs.InitLogger()
+// watchtowerService implements the svc.Handler interface
+type watchtowerService struct{}
 
-	// Load the configuration file
+func (m *watchtowerService) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (ssec bool, errno uint32) {
+	const cmdsAccepted = svc.AcceptStop | svc.AcceptShutdown
+	changes <- svc.Status{State: svc.StartPending}
+
+	// 1. RUN ALL INITIALIZATION LOGIC
+	internal.SetupDirectory()
+	if internal.BaseDir == "" {
+		return false, 1
+	}
+
+	logs.InitLogger(internal.BaseDir)
 	internal.LoadConfig()
-
-	// Establishes connection to databases and updates cpe dictionary
 	data.StartDatabases()
-
-	// Updates databases and ensures schemas are correct
 	data.VerifyDatabases()
+	data.CleanupOrphans()
 
-	// Create a context to trigger graceful stops of background tasks
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Start Background Tasks
-	data.StartCPEUpdater(ctx) // Updates local NIST CPE dictionary on a schedule
+	// Start your background maintenance and monitoring goroutines
+	setupBackgroundTasks(ctx)
 
-	data.StartCVEUpdater(ctx) // Updates local NIST CVE database on a schedule
+	// Build the HTTP Server
+	srv, err := handlers.BuildServer()
+	if err != nil {
+		logs.Sys.Error("Failed to initialize server", "error", err)
+		return false, 1
+	}
 
-	data.StartCPEMapper(ctx) // Attempts to map software catalog to CPE URIs
+	// Start Server goroutine
+	srvErr := make(chan error, 1)
+	go func() {
+		certPath := filepath.Join(internal.BaseDir, "internal", "data", "server.crt")
+		keyPath := filepath.Join(internal.BaseDir, "internal", "data", "server.key")
+		logs.Sys.Info("Watchtower EDR Server starting as Service", "port", "443")
+		if err := srv.ListenAndServeTLS(certPath, keyPath); err != nil && err != http.ErrServerClosed {
+			srvErr <- err
+		}
+	}()
 
-	data.StartCVEMapper(ctx) // Attempts to map software catalog to CVE entries to capture present vulnerabilities
+	// Signal to Windows that the service is now "Running"
+	changes <- svc.Status{State: svc.Running, Accepts: cmdsAccepted}
 
-	// Channel for OS signals (Physical CTRL+C) used to stop the server
+loop:
+	for {
+		select {
+		case err := <-srvErr:
+			logs.Sys.Error("Server crashed", "error", err)
+			break loop
+		case <-handlers.ShutdownChan:
+			logs.Audit.Warn("Shutdown signal received from Web UI")
+			break loop
+		case c := <-r:
+			switch c.Cmd {
+			case svc.Interrogate:
+				changes <- c.CurrentStatus
+			case svc.Stop, svc.Shutdown:
+				logs.Sys.Info("Shutdown signal received from Windows SCM")
+				break loop
+			default:
+				logs.Sys.Error("Unexpected control request", "cmd", c.Cmd)
+			}
+		}
+	}
+
+	// 2. RUN ALL GRACEFUL SHUTDOWN LOGIC
+	changes <- svc.Status{State: svc.StopPending}
+
+	cancel() // Trigger context cancellation for all background workers
+
+	logs.Sys.Info("Waiting for background workers to exit...")
+	data.WG.Wait()
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		logs.Sys.Error("Graceful shutdown failed", "error", err)
+	}
+
+	data.CloseDatabases()
+	logs.Sys.Info("Watchtower is now offline.")
+
+	changes <- svc.Status{State: svc.Stopped}
+	return
+}
+
+func main() {
+
+	seedCmd := flag.NewFlagSet("seed", flag.ExitOnError)
+	user := seedCmd.String("user", "", "Admin username")
+	pass := seedCmd.String("pass", "", "Admin password")
+	email := seedCmd.String("email", "", "Admin email")
+	fqdn := seedCmd.String("fqdn", "", "Server FQDN")
+	nist := seedCmd.String("nist", "", "NIST API Key")
+
+	if len(os.Args) > 1 && os.Args[1] == "seed" {
+		seedCmd.Parse(os.Args[2:])
+
+		internal.SetupDirectory()
+
+		logs.InitLogger(internal.BaseDir)
+
+		// 1. Dereference the pointers to get the strings
+		plainPassword := *pass
+		serverFQDN := *fqdn // Ensure you defined this in seedCmd.String
+		nistKey := *nist    // Ensure you defined this in seedCmd.String
+
+		if plainPassword == "" {
+			fmt.Println("Error: Password cannot be empty for seeding.")
+			os.Exit(1)
+		}
+
+		// 2. Initialize Data and Config
+		internal.LoadConfig()
+
+		// 3. Update the config with values from the installer
+		internal.AppConfig.Server.FQDN = serverFQDN
+		internal.AppConfig.NVD.APIKey = nistKey
+
+		// Save the updated struct back to internal\data\config.yaml
+		internal.SaveConfig(internal.AppConfig)
+
+		// 4. Seed the admin user (hashing happens inside this function)
+		data.StartDatabases()
+		hashedPassword, _ := handlers.HashPassword(plainPassword)
+		data.CreateInitialAdmin(*user, *email, hashedPassword)
+		data.CloseDatabases()
+		fmt.Println("Watchtower EDR: Provisioning and Database seeding successful.")
+		os.Exit(0)
+	}
+
+	// Check if we are running as a service or interactively
+	isService, err := svc.IsWindowsService()
+	if err != nil {
+		fmt.Printf("Failed to detect service context: %v\n", err)
+		os.Exit(1)
+	}
+
+	if isService {
+		// Run as Windows Service
+		// "WatchtowerEDR" must match the name used in your Inno Setup / sc create command
+		err = svc.Run("WatchtowerEDR", &watchtowerService{})
+		if err != nil {
+			logs.Sys.Error("Service execution failed", "error", err)
+		}
+	} else {
+		// Run in Terminal (Interactive Mode)
+		runInteractive()
+	}
+}
+
+// setupBackgroundTasks contains all your tickers and search engine logic
+func setupBackgroundTasks(ctx context.Context) {
+	// Daily Maintenance
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				data.CleanupOrphans()
+			}
+		}
+	}()
+
+	// Search Engine Initialization
+	indexPath := filepath.Join(internal.BaseDir, "internal", "data", "cpe_index_db")
+	CpeEngine := data.NewSearchEngine(indexPath)
+	info, err := os.Stat(indexPath)
+	if err != nil || !info.IsDir() {
+		logs.Sys.Info("Search index missing. Hydrating...")
+		data.InitializeCPEIndex(ctx, CpeEngine)
+	} else {
+		data.RunIndexRepair(ctx, CpeEngine)
+	}
+
+	// Hourly Index Repair
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				data.RunIndexRepair(ctx, CpeEngine)
+			}
+		}
+	}()
+
+	// Start all other background managers
+	handlers.StartStatusMonitor(ctx)
+	data.StartCPEUpdater(ctx, CpeEngine)
+	data.StartCVEUpdater(ctx)
+	data.StartCPEMapper(ctx, CpeEngine)
+	data.StartCVEMapper(ctx)
+}
+
+// runInteractive runs the server exactly how you had it before for terminal use
+func runInteractive() {
+	internal.SetupDirectory()
+	logs.InitLogger(internal.BaseDir)
+	internal.LoadConfig()
+	data.StartDatabases()
+	data.VerifyDatabases()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	data.CleanupOrphans()
+	setupBackgroundTasks(ctx)
+
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
-	// --------------------------------------------------------
-	//                   START SERVER
-	//---------------------------------------------------------
-
-	// Get the configured server
 	srv, err := handlers.BuildServer()
 	if err != nil {
 		slog.Error("Failed to initialize server", "error", err)
 		os.Exit(1)
 	}
 
-	// Run ListenAndServe in a goroutine
 	srvErr := make(chan error, 1)
 	go func() {
+		certPath := filepath.Join(internal.BaseDir, "internal", "data", "server.crt")
+		keyPath := filepath.Join(internal.BaseDir, "internal", "data", "server.key")
 		logs.Sys.Info("Watchtower EDR Server starting", "port", "443")
-		certPath := "./internal/data/server.crt"
-		keyPath := "./internal/data/server.key"
-
 		if err := srv.ListenAndServeTLS(certPath, keyPath); err != nil && err != http.ErrServerClosed {
 			srvErr <- err
 		}
 	}()
 
-	// Wait for Shutdown Signal, Web UI Request, or Server Error
 	select {
 	case err := <-srvErr:
 		logs.Sys.Error("Server crashed", "error", err)
-
 	case sig := <-stop:
-		logs.Sys.Info("Shutdown signal received from OS", "signal", sig.String())
-
+		logs.Sys.Info("Shutdown signal received", "signal", sig.String())
 	case <-handlers.ShutdownChan:
 		logs.Audit.Warn("Shutdown signal received from Web UI")
 	}
 
-	// Trigger cancellation of background tasks (scheduled taks like CPE Updater, Agent Cleaner, and Agent Status Updater)
 	cancel()
-
-	logs.Sys.Info("Waiting for background workers to exit...")
 	data.WG.Wait()
 
-	// --------------------------------------------------------
-	//                  GRACEFUL SHUTDOWN
-	//---------------------------------------------------------
-	logs.Sys.Info("Shutting down Watchtower EDR Server and closing connections...")
-
-	// Create a context with a 5-second timeout
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
-
-	// This gracefully stops the server
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		logs.Sys.Error("Graceful shutdown failed", "error", err)
-	}
-
-	logs.Sys.Info("Closing all database connections...")
+	srv.Shutdown(shutdownCtx)
 	data.CloseDatabases()
-
-	time.Sleep(1 * time.Second)
 	logs.Sys.Info("Watchtower is now offline.")
 }

@@ -6,8 +6,8 @@
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <link rel="stylesheet" href="/public/css/styles.css">
-        
-        <link rel="icon" type="image/png" href="/public/img/logo_{{ .BaseData.Theme }}.png" />
+        <link rel="stylesheet" href="/public/css/assets.css">
+        <link rel="icon" type="image/png" href="/public/img/ico_{{ .BaseData.Theme }}.png" />
         <title>Watchtower EDR</title>
     </head>
     <body class="{{ .BaseData.Theme }}">
@@ -24,7 +24,11 @@
                     
                     <a href="/agents" class="{{ if eq $.BaseData.CurrentPath "/agents" }}active{{ end }}">Agents</a>
                     
-                    <a href="/reports" class="{{ if eq $.BaseData.CurrentPath "/reports" }}active{{ end }}">Reports</a>
+                    <a href="/software" class="{{ if eq $.BaseData.CurrentPath "/software" }}active{{ end }}">Software Inventory</a>
+
+                    <a href="/vulnerabilities" class="{{ if eq $.BaseData.CurrentPath "/vulnerabilities" }}active{{ end }}">Vulnerability Management</a>
+
+                    <a href="/reporting" class="{{ if eq $.BaseData.CurrentPath "/reporting" }}active{{ end }}">Reporting</a>
                     
                     <a href="/settings" class="{{ if eq $.BaseData.CurrentPath "/settings" }}active{{ end }}">Settings</a>
                 </nav>
@@ -33,9 +37,9 @@
             <main class="main-content">
                 <header class="top-nav">
                     <div class="user-menu">
-                        <button class="user-btn">{{ .BaseData.Username }}</button>
+                        <button style="text-transform: capitalize;" class="user-btn">{{ .BaseData.Username }}</button>
                         <div class="dropdown-content">
-                            <a href="/profile">Profile</a>
+                            <a onclick="openUserModal('{{ .BaseData.Username }}')">Profile</a>
                             <form action="/logout" method="POST">
                                 <button type="submit">Logout</button>
                             </form>
@@ -47,6 +51,46 @@
                     {{ template "content" . }}
                 </section>
             </main>
+        </div>
+
+        <div id="userModal" class="modal-overlay" style="display: none;">
+            <div class="custom-modal">
+                <div class="modal-header">
+                    <h3>Update User Information</h3>
+                    <button type="button" class="close-btn" onclick="closeUserModal()">&times;</button>
+                </div>
+
+                <form id="updateUserForm" onsubmit="handleUserUpdate(event, '{{.BaseData.Username}}')">
+                    <input type="hidden" id="modal-user-id" value="">
+                    
+                    <div class="modal-body">
+                        <div class="form-group">
+                            <label for="edit-username">Username</label>
+                            <input class="form-input" type="text" id="edit-username" autocomplete="off" value="{{ .BaseData.Username }}" required>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="edit-email">Email Address</label>
+                            <input class="form-input" type="email" id="edit-email" value="" required>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="edit-password">New Password</label>
+                            <input class="form-input" type="password" id="edit-password" autocomplete="new-password" placeholder="Leave blank to keep current">
+                        </div>
+
+                        <div class="time-footer" style="justify-content: right;">
+                            <span>Last Updated: &nbsp;&nbsp;</span>
+                            <strong id="modal-user-updated-on"></strong>
+                        </div>
+                    </div>
+
+                    <div class="modal-footer">
+                        <button type="button" class="btn-warning" onclick="closeUserModal()">Cancel</button>
+                        <button type="submit" class="btn-primary">Save Changes</button>
+                    </div>
+                </form>
+            </div>
         </div>
         <script src="/public/js/base.js"></script>
     </body>

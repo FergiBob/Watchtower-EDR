@@ -15,15 +15,16 @@ import (
 )
 
 var (
-	// Main_Database is the EXCLUSIVE WRITER (SetMaxOpenConns = 1)
+	// --- EXCLUSIVE WRITERS (SetMaxOpenConns = 1) ---
 	Main_Database *sql.DB
-
-	// Main_Read_Database is the CONCURRENT READER (SetMaxOpenConns = 0)
-	Main_Read_Database *sql.DB
-
 	User_Database *sql.DB
 	CPE_Database  *sql.DB
 	CVE_Database  *sql.DB
+
+	// --- CONCURRENT READERS (SetMaxOpenConns = 10) ---
+	Main_Read_Database *sql.DB
+	CPE_Read_Database  *sql.DB
+	CVE_Read_Database  *sql.DB
 
 	// WG is used to ensure database processes are complete before server closes
 	WG sync.WaitGroup
@@ -41,7 +42,6 @@ func WriteQuery(db *sql.DB, query string, params ...interface{}) error {
 
 	var lastErr error
 	for i := 0; i < 5; i++ {
-		// The closure ensures tx.Rollback() clears connection state BEFORE the next retry loop
 		err := func() error {
 			tx, err := db.Begin()
 			if err != nil {
@@ -60,7 +60,6 @@ func WriteQuery(db *sql.DB, query string, params ...interface{}) error {
 		}
 
 		lastErr = err
-		// Retry if database is locked or driver state is conflicted
 		if strings.Contains(err.Error(), "locked") || strings.Contains(err.Error(), "transaction") {
 			time.Sleep(time.Duration(i+1) * 50 * time.Millisecond)
 			continue
@@ -70,7 +69,7 @@ func WriteQuery(db *sql.DB, query string, params ...interface{}) error {
 	return lastErr
 }
 
-// ReadQuery executes a read operation and returns rows
+// ReadQuery executes a read operation and returns rows.
 func ReadQuery(db *sql.DB, query string, params ...interface{}) (*sql.Rows, error) {
 	rows, err := db.Query(query, params...)
 	if err != nil {
@@ -80,7 +79,7 @@ func ReadQuery(db *sql.DB, query string, params ...interface{}) (*sql.Rows, erro
 	return rows, nil
 }
 
-// QuerySingleRow simplifies read queries that only return one row
+// QuerySingleRow simplifies read queries that only return one row.
 func QuerySingleRow(db *sql.DB, query string, args []any, dest ...any) error {
 	err := db.QueryRow(query, args...).Scan(dest...)
 	if err != nil && err != sql.ErrNoRows {
@@ -94,13 +93,14 @@ func QuerySingleRow(db *sql.DB, query string, args []any, dest ...any) error {
 func initDB(path string, maxConns int, readOnly bool) *sql.DB {
 	logs.DB.Info("Initializing database connection", "path", path, "readonly", readOnly)
 
-	mode := "rwc"
+	var dsn string
 	if readOnly {
-		mode = "ro"
+		// READERS: use cache=shared to allow multiple read handles to coordinate
+		dsn = fmt.Sprintf("file:%s?mode=ro&cache=shared&_pragma=busy_timeout(10000)&_pragma=synchronous(NORMAL)", path)
+	} else {
+		// WRITERS: no shared cache to prevent permission inheritance issues, explicit WAL mode
+		dsn = fmt.Sprintf("file:%s?mode=rwc&_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)", path)
 	}
-
-	// dsn includes busy_timeout (10s) and WAL mode for concurrent performance
-	dsn := fmt.Sprintf("file:%s?mode=%s&_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)", path, mode)
 
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -122,26 +122,52 @@ func initDB(path string, maxConns int, readOnly bool) *sql.DB {
 func StartDatabases() {
 	logs.Sys.Info("Starting all database engines...")
 
+	// Exclusive Writers
 	Main_Database = initDB(internal.AppConfig.Database.MainDB, 1, false)
-	Main_Read_Database = initDB(internal.AppConfig.Database.MainDB, 0, true)
 	User_Database = initDB(internal.AppConfig.Database.UserDB, 1, false)
 	CPE_Database = initDB(internal.AppConfig.Database.CpeDB, 1, false)
 	CVE_Database = initDB(internal.AppConfig.Database.CveDB, 1, false)
+
+	// Functional Readers (Used for Mappers and UI)
+	Main_Read_Database = initDB(internal.AppConfig.Database.MainDB, 10, true)
+	CPE_Read_Database = initDB(internal.AppConfig.Database.CpeDB, 10, true)
+	CVE_Read_Database = initDB(internal.AppConfig.Database.CveDB, 10, true)
 }
 
 func CloseDatabases() {
-	logs.Sys.Info("Closing all database connections...")
+	logs.Sys.Info("Initiating global database checkpoint and shutdown...")
+
 	dbs := map[string]*sql.DB{
-		"Main_Write": Main_Database, "Main_Read": Main_Read_Database,
-		"User": User_Database, "CPE": CPE_Database, "CVE": CVE_Database,
+		"Main_Write": Main_Database,
+		"Main_Read":  Main_Read_Database,
+		"User":       User_Database,
+		"CPE_Write":  CPE_Database,
+		"CPE_Read":   CPE_Read_Database,
+		"CVE_Write":  CVE_Database,
+		"CVE_Read":   CVE_Read_Database,
 	}
-	for _, db := range dbs {
-		if db != nil {
-			db.Close()
+
+	for name, db := range dbs {
+		if db == nil {
+			continue
+		}
+
+		// Checkpoint writers to merge WAL files
+		if !strings.Contains(name, "Read") {
+			if _, err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE);"); err != nil {
+				logs.DB.Debug("Note: WAL checkpoint skipped or restricted", "db", name, "error", err)
+			}
+		}
+
+		if err := db.Close(); err != nil {
+			logs.DB.Error("Error closing database handle", "db", name, "error", err)
+		} else {
+			logs.Sys.Info("Database handle closed cleanly", "db", name)
 		}
 	}
+
 	CloseAllArchives()
-	logs.Sys.Info("Databases closed successfully")
+	logs.Sys.Info("All Watchtower database systems are now offline.")
 }
 
 func VerifyDatabases() {
@@ -155,18 +181,20 @@ func VerifyDatabases() {
 
 func setupCPEDictionary(db *sql.DB) {
 	query := `
-	CREATE TABLE IF NOT EXISTS cpe_dictionary (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		cpe_uri TEXT UNIQUE,
-		vendor TEXT, product TEXT, version TEXT,
-		deprecated INTEGER DEFAULT 0
-	);
-	CREATE INDEX IF NOT EXISTS idx_cpe_search ON cpe_dictionary(vendor, product, version);
-	CREATE TABLE IF NOT EXISTS sync_metadata (
-		key TEXT PRIMARY KEY,
-		last_sync_timestamp TEXT,
-		record_count INTEGER
-	);`
+    CREATE TABLE IF NOT EXISTS cpe_dictionary (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cpe_uri TEXT UNIQUE,
+        vendor TEXT, product TEXT, version TEXT,
+        deprecated INTEGER DEFAULT 0,
+		is_indexed INTEGER DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_cpe_search ON cpe_dictionary(vendor, product, version);
+	CREATE INDEX IF NOT EXISTS idx_cpe_unindexed ON cpe_dictionary(is_indexed) WHERE is_indexed = 0;
+    CREATE TABLE IF NOT EXISTS sync_metadata (
+        key TEXT PRIMARY KEY,
+        last_sync_timestamp TEXT,
+        record_count INTEGER
+    );`
 	if err := WriteQuery(db, query); err != nil {
 		logs.Sys.Error("CPE Database initialization failed", "error", err)
 		os.Exit(1)
@@ -176,55 +204,93 @@ func setupCPEDictionary(db *sql.DB) {
 
 func setupCVEDatabase(db *sql.DB) {
 	query := `
-	CREATE TABLE IF NOT EXISTS vulnerabilities (
-		cve_id TEXT PRIMARY KEY,
-		description TEXT, severity TEXT,
-		cvss_score REAL, published TEXT
-	);
-	CREATE TABLE IF NOT EXISTS software_vulnerabilities (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		cve_id TEXT, cpe_uri TEXT,
-		version_start TEXT, version_end TEXT,
-		FOREIGN KEY(cve_id) REFERENCES vulnerabilities(cve_id) ON DELETE CASCADE
-	);
-	CREATE INDEX IF NOT EXISTS idx_sv_cpe_lookup ON software_vulnerabilities(cpe_uri);
-	CREATE TABLE IF NOT EXISTS sync_metadata (
-		key TEXT PRIMARY KEY,
-		last_sync_timestamp TEXT,
-		record_count INTEGER
-	);`
+    CREATE TABLE IF NOT EXISTS vulnerabilities (
+        cve_id TEXT PRIMARY KEY,
+        description TEXT,
+        severity TEXT,
+        cvss_score REAL,
+        exploit_score REAL,
+        impact_score REAL,
+        published TEXT,
+        last_modified TEXT,
+        solution TEXT
+    );
+    CREATE TABLE IF NOT EXISTS software_vulnerabilities (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cve_id TEXT, 
+        cpe_uri TEXT,
+        version_start TEXT, 
+        version_end TEXT,
+        FOREIGN KEY(cve_id) REFERENCES vulnerabilities(cve_id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_sv_cpe_lookup ON software_vulnerabilities(cpe_uri);
+    CREATE TABLE IF NOT EXISTS sync_metadata (
+        key TEXT PRIMARY KEY,
+        last_sync_timestamp TEXT,
+        record_count INTEGER
+    );`
 	if err := WriteQuery(db, query); err != nil {
 		logs.Sys.Error("CVE Database initialization failed", "error", err)
 		os.Exit(1)
 	}
-	logs.DB.Info("Vulnerability Database schema verified/initialized")
 }
 
 func setupMainSQL(db *sql.DB) {
 	query := `
-	PRAGMA foreign_keys = ON;
-	CREATE TABLE IF NOT EXISTS agents (
-		agent_id TEXT PRIMARY KEY, machine_id TEXT UNIQUE, 
-		hostname TEXT, ip_address TEXT, os TEXT, os_version TEXT, os_cpe_uri TEXT,
-		status TEXT DEFAULT 'active', last_seen DATETIME DEFAULT CURRENT_TIMESTAMP
-	);
-	CREATE TABLE IF NOT EXISTS software (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		cpe_uri TEXT UNIQUE, name TEXT, version TEXT, vendor TEXT
-	);
-	CREATE TABLE IF NOT EXISTS agent_software (
-		agent_id TEXT, software_id INTEGER, install_date TEXT,
-		PRIMARY KEY (agent_id, software_id),
-		FOREIGN KEY (agent_id) REFERENCES agents(agent_id) ON DELETE CASCADE,
-		FOREIGN KEY (software_id) REFERENCES software(id) ON DELETE CASCADE
-	);
+    PRAGMA foreign_keys = ON;
+    CREATE TABLE IF NOT EXISTS agents (
+        agent_id TEXT PRIMARY KEY,
+        machine_id TEXT UNIQUE,
+        hostname TEXT,
+        ip_address TEXT,
+		category TEXT,
+		description TEXT,
+        os TEXT,           
+        os_name TEXT,         
+        os_version TEXT,      
+        os_build TEXT,        
+        os_cpe_uri TEXT,
+        status TEXT DEFAULT 'active',
+        binary_version TEXT,
+        first_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+        last_seen DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS software (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cpe_uri TEXT UNIQUE, name TEXT, version TEXT, vendor TEXT, mapped INTEGER DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS agent_software (
+        agent_id TEXT, software_id INTEGER, install_date TEXT,
+        PRIMARY KEY (agent_id, software_id),
+        FOREIGN KEY (agent_id) REFERENCES agents(agent_id) ON DELETE CASCADE,
+        FOREIGN KEY (software_id) REFERENCES software(id) ON DELETE CASCADE
+    );
 	CREATE TABLE IF NOT EXISTS discovered_vulnerabilities (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		agent_id TEXT NOT NULL, target_type TEXT NOT NULL,
-		software_id INTEGER, cpe_uri TEXT, cve_id TEXT NOT NULL,
-		severity TEXT, cvss_score REAL, detected_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		status TEXT DEFAULT 'open',
+		agent_id TEXT NOT NULL,
+		cve_id TEXT NOT NULL,
+		target_type TEXT NOT NULL,    -- 'os' or 'application'
+		software_id INTEGER,          -- Links to software table (NULL for OS)
+		cpe_uri TEXT,
+		severity TEXT,                -- 'CRITICAL', 'HIGH', etc.
+		cvss_score REAL,
+		exploit_score REAL,
+		impact_score REAL,
+		published_date DATETIME,
+		last_modified DATETIME,
+		status TEXT DEFAULT 'open', 
+		detected_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		UNIQUE(agent_id, target_type, software_id, cve_id)
+	);
+	CREATE TABLE IF NOT EXISTS software_mappings (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		raw_name TEXT,    
+		raw_vendor TEXT,    
+		raw_version TEXT, 
+		selected_cpe TEXT,  
+		mapped_by TEXT,      
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE(raw_name, raw_vendor, raw_version)
 	);`
 	if err := WriteQuery(db, query); err != nil {
 		logs.Sys.Error("Main database initialization failed", "error", err)
@@ -233,13 +299,73 @@ func setupMainSQL(db *sql.DB) {
 	logs.DB.Info("Main Database schema verified/initialized")
 }
 
-func CleanupOrphans() {
-	query := `DELETE FROM software WHERE id NOT IN (SELECT DISTINCT software_id FROM agent_software);`
-	if err := WriteQuery(Main_Database, query); err != nil {
-		logs.DB.Error("Failed to cleanup orphaned database records", "error", err)
-	} else {
-		logs.Audit.Info("Orphaned software records cleaned up successfully")
+func CreateInitialAdmin(user, email, password string) {
+	// 1. First, ensure the table exists
+	schemaQuery := `
+    CREATE TABLE IF NOT EXISTS users (
+        "ID" INTEGER NOT NULL UNIQUE,
+        "username" TEXT NOT NULL,
+        "email" TEXT,
+        "password_hash" TEXT NOT NULL,
+        "created_on" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updated_on" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY("ID" AUTOINCREMENT)
+    );`
+
+	if err := WriteQuery(User_Database, schemaQuery); err != nil {
+		logs.Sys.Error("Failed to create users table", "error", err)
+		os.Exit(1)
 	}
+
+	// 2. Then, insert the admin user
+	insertQuery := `INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)`
+	if err := WriteQuery(User_Database, insertQuery, user, email, password); err != nil {
+		logs.Sys.Error("Failed to insert initial admin", "error", err)
+		os.Exit(1)
+	}
+
+	logs.Sys.Info("Initial admin user created successfully")
+}
+
+func CleanupOrphans() {
+	// Start a transaction on the Main Database
+	tx, err := Main_Database.Begin()
+	if err != nil {
+		logs.DB.Error("Failed to start maintenance transaction", "error", err)
+		return
+	}
+
+	// Ensure rollback in event of error
+	defer tx.Rollback()
+
+	// Remove software mappings for agents that are missing or decommissioned
+	cleanMappingsQuery := `
+		DELETE FROM agent_software 
+		WHERE agent_id NOT IN (SELECT agent_id FROM agents)
+		OR agent_id IN (SELECT agent_id FROM agents WHERE status = 'decommissioned');
+	`
+	if _, err := tx.Exec(cleanMappingsQuery); err != nil {
+		logs.DB.Error("Failed to cleanup orphaned agent_software mappings", "error", err)
+		return
+	}
+
+	// Remove software records that no longer have any associated installations
+	cleanSoftwareQuery := `
+		DELETE FROM software 
+		WHERE id NOT IN (SELECT DISTINCT software_id FROM agent_software);
+	`
+	if _, err := tx.Exec(cleanSoftwareQuery); err != nil {
+		logs.DB.Error("Failed to cleanup orphaned software master records", "error", err)
+		return
+	}
+
+	// Commit the transaction
+	if err := tx.Commit(); err != nil {
+		logs.DB.Error("Failed to commit maintenance transaction", "error", err)
+		return
+	}
+
+	logs.Audit.Info("Database maintenance complete: Stale mappings and orphaned software removed.")
 }
 
 // -------------------- ARCHIVE HANDLING --------------------------

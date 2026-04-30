@@ -1,0 +1,249 @@
+{{define "content"}}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+<script src="/public/js/vulnerabilities.js"></script>
+
+<div class="inventory-page">
+    <div class="page-header" style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px;">
+        <div class="title-group">
+            <h1>Vulnerability Management</h1>
+            <br>
+        </div>
+        
+        <div class="header-button-group">
+            <button class="btn-primary" onclick="triggerVulnScan()">
+                <i class="bi bi-shield-shaded"></i> Run Global Scan
+            </button>
+        </div>
+    </div>
+
+    <div class="boxed-content">
+        <form method="GET" action="/vulnerabilities">
+            <div style="display: flex; gap: 20px; align-items: flex-end; flex-wrap: wrap;">
+                <div class="form-group" style="flex: 2; min-width: 300px;">
+                    <label>Search Vulnerabilities</label>
+                    <input type="text" name="search" value="{{.SearchTerm}}" placeholder="Search CVE-ID or affected product...">
+                </div>
+
+                <div class="form-group" style="flex: 1; min-width: 150px;">
+                    <label>Remediation Status</label>
+                    <select name="status" onchange="this.form.submit()">
+                        <option value="">All Statuses</option>
+                        <option value="open" {{if eq "open" .SelectedStatus}}selected{{end}}>Open</option>
+                        <option value="in-progress" {{if eq "in-progress" .SelectedStatus}}selected{{end}}>In Progress</option>
+                        <option value="resolved" {{if eq "resolved" .SelectedStatus}}selected{{end}}>Resolved</option>
+                        <option value="risk-accepted" {{if eq "risk-accepted" .SelectedStatus}}selected{{end}}>Risk Accepted</option>
+                        <option value="false-positive" {{if eq "false-positive" .SelectedStatus}}selected{{end}}>False Positive</option>
+                    </select>
+                </div>
+
+                <div class="form-group" style="flex: 1; min-width: 150px;">
+                    <label>Severity Filter</label>
+                    <select name="severity" onchange="this.form.submit()">
+                        <option value="">All Severities</option>
+                        <option value="CRITICAL" {{if eq "CRITICAL" .SelectedSeverity}}selected{{end}}>Critical</option>
+                        <option value="HIGH" {{if eq "HIGH" .SelectedSeverity}}selected{{end}}>High</option>
+                        <option value="MEDIUM" {{if eq "MEDIUM" .SelectedSeverity}}selected{{end}}>Medium</option>
+                        <option value="LOW" {{if eq "LOW" .SelectedSeverity}}selected{{end}}>Low</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div style="margin-top: 15px; display: flex; gap: 10px;">
+                <button type="submit" class="btn-primary"><i class="bi bi-search">&nbsp; Search</i></button>
+                {{if or .SearchTerm .SelectedSeverity .SelectedStatus}}
+                    <a href="/vulnerabilities" class="btn-secondary" style="text-decoration: none; padding: 10px 20px;">Clear Filters</a>
+                {{end}}
+            </div>
+        </form>
+    </div>
+
+    <div class="inventory-list-container">
+        <table class="data-table separated-rows">
+            <thead>
+                <tr>
+                    <th>
+                        <a href="?search={{.SearchTerm}}&severity={{.SelectedSeverity}}&status={{.SelectedStatus}}&sort=cve_id&dir={{if eq .SortBy "cve_id"}}{{if eq .SortDir "asc"}}desc{{else}}asc{{end}}{{else}}asc{{end}}" class="sort-link" style="text-align: left;">
+                            CVE ID {{if eq .SortBy "cve_id"}}{{if eq .SortDir "asc"}}▲{{else}}▼{{end}}{{end}}
+                        </a>
+                    </th>
+                    <th>
+                        <a href="?search={{.SearchTerm}}&severity={{.SelectedSeverity}}&status={{.SelectedStatus}}&sort=display_name&dir={{if eq .SortBy "display_name"}}{{if eq .SortDir "asc"}}desc{{else}}asc{{end}}{{else}}asc{{end}}" class="sort-link" style="text-align: left;">
+                            Affected Product {{if eq .SortBy "display_name"}}{{if eq .SortDir "asc"}}▲{{else}}▼{{end}}{{end}}
+                        </a>
+                    </th>
+                    <th style="text-align: center;">Type</th>
+                    <th>
+                        <a href="?search={{.SearchTerm}}&severity={{.SelectedSeverity}}&status={{.SelectedStatus}}&sort=severity&dir={{if eq .SortBy "severity"}}{{if eq .SortDir "asc"}}desc{{else}}asc{{end}}{{else}}asc{{end}}" class="sort-link">
+                            Severity {{if eq .SortBy "severity"}}{{if eq .SortDir "asc"}}▲{{else}}▼{{end}}{{end}}
+                        </a>
+                    </th>
+                    <th>
+                        <a href="?search={{.SearchTerm}}&severity={{.SelectedSeverity}}&status={{.SelectedStatus}}&sort=cvss_score&dir={{if eq .SortBy "cvss_score"}}{{if eq .SortDir "asc"}}desc{{else}}asc{{end}}{{else}}asc{{end}}" class="sort-link">
+                            Score {{if eq .SortBy "cvss_score"}}{{if eq .SortDir "asc"}}▲{{else}}▼{{end}}{{end}}
+                        </a>
+                    </th>
+                    <th>
+                        <a href="?search={{.SearchTerm}}&severity={{.SelectedSeverity}}&status={{.SelectedStatus}}&sort=asset_count&dir={{if eq .SortBy "asset_count"}}{{if eq .SortDir "asc"}}desc{{else}}asc{{end}}{{else}}asc{{end}}" class="sort-link">
+                            Assets {{if eq .SortBy "asset_count"}}{{if eq .SortDir "asc"}}▲{{else}}▼{{end}}{{end}}
+                        </a>
+                    </th>
+                    <th>Status</th>
+                    <th style="text-align: right;">Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .Vulnerabilities}}
+                <tr class="inventory-row">
+                    <td class="primary-cell">
+                        <span class="inventory-title">{{.CVEID}}</span>
+                    </td>
+                    <td>
+                        <div style="display: flex; flex-direction: column;">
+                            <span style="font-weight: 500;">{{.SoftwareName}}</span>
+                            <span style="font-size: 0.75rem; color: var(--text-muted);">&nbsp&nbsp&nbsp   Version: {{.SoftwareVersion}}</span>
+                            <span style="font-size: 0.75rem; color: var(--text-muted);">&nbsp&nbsp&nbsp   Vendor: {{.SoftwareVendor}}</span>
+                        </div>
+                    </td>
+                    <td style="text-align: center;">
+                        {{if eq .TargetType "Operating System"}}
+                            <i class="bi bi-cpu" title="Operating System" style="color: var(--text-muted);"></i>
+                        {{else}}
+                            <i class="bi bi-box-seam" title="Application" style="color: var(--text-muted);"></i>
+                        {{end}}
+                    </td>
+                    <td style="text-align: center;">
+                        <span class="severity-badge sev-{{.Severity}}">
+                            {{.Severity}}
+                        </span>
+                    </td>
+                    <td style="text-align: center;">
+                        <span class="pill-1">{{.BaseScore}}</span>
+                    </td>
+                    <td style="text-align: center;">
+                        <span class="pill-2">{{.AssetCount}}</span>
+                    </td>
+                    <td style="text-align: center; vertical-align: middle;">
+                        <div style="display: inline-flex; align-items: center; gap: 6px;">
+                            <span class="dot dot-{{.Status}}"></span>
+                            <span style="text-transform: capitalize; color: var(--text-color);">
+                                {{.Status}}
+                            </span>
+                        </div>
+                    </td>
+                    <td style="text-align: right;">
+                        <button class="btn-hollow btn-small" onclick="openVulnerabilityModal('{{.CVEID}}', '{{.CPE_URI}}')">
+                            Review Risk
+                        </button>
+                    </td>
+                </tr>
+                {{else}}
+                <tr>
+                    <td colspan="7" class="empty-state" style="text-align: center; padding: 40px; color: #888;">
+                        No vulnerabilities found matching your criteria.
+                    </td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div id="vulnerabilityModal" class="modal-overlay">
+    <div class="custom-modal wide">
+        <div class="modal-header">
+            <div>
+                <h2 id="modal-cve-id" style="margin:0;">CVE-ID</h2>
+                <span id="modal-severity" class="severity-badge" style="font-size: 0.8rem;"></span>
+            </div>
+            <button class="close-btn" onclick="closeModal()">&times;</button>
+        </div>
+
+        <div class="modal-body">
+            <div class="modal-grid" style="display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 20px;">
+                
+                <div class="modal-section vuln-intelligence">
+                    <h3><i class="bi bi-shield-exclamation me-2"></i>&nbsp; Vulnerability Intelligence</h3>
+                    <div class="description-box" style="background: var(--bg-secondary); padding: 15px; border-radius: 8px; min-height: 150px; margin-bottom: 15px;">
+                        <label style="display:block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 5px;">Description</label>
+                        <p id="modal-description" style="font-size: 0.9rem; margin: 0; line-height: 1.5;"></p>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px;">
+                        <div class="metric-card" style="background: rgba(255,255,255,0.05); padding: 10px; border-radius: 4px; text-align: center;">
+                            <label style="display:block; font-size: 0.65rem; color: var(--text-muted);">Exploit Score</label>
+                            <span id="modal-exploit-score" style="font-weight: bold; font-family: monospace;"></span>
+                        </div>
+                        <div class="metric-card" style="background: rgba(255,255,255,0.05); padding: 10px; border-radius: 4px; text-align: center;">
+                            <label style="display:block; font-size: 0.65rem; color: var(--text-muted);">Impact Score</label>
+                            <span id="modal-impact-score" style="font-weight: bold; font-family: monospace;"></span>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Remediation Status</label>
+                        <select id="status-select" class="form-input" onchange="patchVulnerabilityStatus()">
+                            <option value="open">Open</option>
+                            <option value="in-progress">In Progress</option>
+                            <option value="resolved">Resolved</option>
+                            <option value="risk-accepted">Risk Accepted</option>
+                            <option value="false-positive">False Positive</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="modal-section tech-data" style="background: var(--bg-secondary); padding: 15px; border-radius: 8px;">
+                    <h3><i class="bi bi-info-circle me-2"></i>&nbsp; Discovery Context</h3>
+                    
+                    <div class="data-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                        <span>CVSS v3 Score</span>
+                        <strong id="modal-score" style="font-size: 1.2rem;"></strong>
+                    </div>
+
+                    <div class="data-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                        <span>Target Type</span>
+                        <span id="modal-target-type" class="badge" style="text-transform: uppercase; font-size: 0.7rem;"></span>
+                    </div>
+
+                    <div class="data-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                        <span>Affected Agents</span>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span id="modal-agent-count" onclick="viewAffectedAgents()" class="btn-hollow" title="View Affected Agents"></span> 
+                            <span id="modal-software-id"></span>   
+                        </div>
+                    </div>
+
+                    <div class="data-row" style="margin-bottom: 12px; border-top: 1px solid var(--border-color); padding-top: 10px;">
+                        <label style="display:block; font-size: 0.65rem; color: var(--text-muted);">Asset CPE</label>
+                        <a id="modal-cpe-link" href="#" style="text-decoration: none;" title="View Software Information">
+                            <code id="modal-cpe" style="font-size: 0.75rem; word-break: break-all; display: block; margin-top: 4px; color: var(--accent-primary)"></code>
+                        </a>
+                    </div>
+
+                    <div class="time-footer" style="margin-top: 20px; border-top: 1px solid var(--border-color); padding-top: 10px;">
+                        <div style="display: flex; flex-direction: column; gap: 10px;">
+                            <div class="time-block">
+                                <label style="display:block; font-size: 0.65rem; color: var(--text-muted);">NVD Published</label>
+                                <span id="modal-published" style="font-size: 0.8rem;"></span>
+                            </div>
+                            <div class="time-block">
+                                <label style="display:block; font-size: 0.65rem; color: var(--text-muted);">NVD Last Modified</label>
+                                <span id="modal-modified" style="font-size: 0.8rem;"></span>
+                            </div>
+                            <div class="time-block" style="background: rgba(80, 250, 123, 0.1); padding: 5px; border-radius: 4px;">
+                                <label style="display:block; font-size: 0.65rem; color: var(--text-muted);">First Detected on Agents</label>
+                                <span id="modal-first-detected" style="font-size: 0.8rem; font-weight: bold;"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <div class="modal-footer">
+            <button class="btn-warning" onclick="closeModal()">Close</button>
+        </div>
+    </div>
+</div>
+
+{{end}}
