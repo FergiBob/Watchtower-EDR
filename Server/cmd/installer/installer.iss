@@ -38,7 +38,7 @@ Filename: "{cmd}"; Parameters: "/c del ""{app}\internal\data\logs\watchtower.log
 ; 2. Registration - Using {quote} for cleaner path handling. 
 ; Note: The space after 'binPath=' is mandatory for sc.exe
 Filename: "{sys}\sc.exe"; \
-    Parameters: "create WatchtowerEDR binPath= ""\""{app}\watchtower.exe\"""" DisplayName= ""Watchtower EDR"" start= auto"; \
+    Parameters: "create WatchtowerEDR binPath= ""\""{app}\watchtower.exe\"""" DisplayName= ""Watchtower EDR"" start= delayed-auto"; \
     Flags: runhidden waituntilterminated
 
 ; 3. Description - Helpful for users looking at services.msc
