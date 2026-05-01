@@ -8,6 +8,6 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
 
-require github.com/kardianos/service v1.2.4 // indirect
+require github.com/kardianos/service v1.2.4
 
 replace Watchtower_EDR/shared => ../shared

@@ -24,47 +24,61 @@ type watchtowerService struct{}
 
 func (m *watchtowerService) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (ssec bool, errno uint32) {
 	const cmdsAccepted = svc.AcceptStop | svc.AcceptShutdown
+
+	// 1. Tell Windows immediately that we are attempting to start.
 	changes <- svc.Status{State: svc.StartPending}
 
-	// 1. RUN ALL INITIALIZATION LOGIC
+	// 2. Fundamental Environment Setup
 	internal.SetupDirectory()
 	if internal.BaseDir == "" {
+		// If we can't find our own folder, we can't log or load data.
 		return false, 1
 	}
 
+	// Initialize logs and config so we have visibility into any failures.
 	logs.InitLogger(internal.BaseDir)
 	internal.LoadConfig()
+
+	// 3. Start Core Engines
+	// We start the databases here because handlers.BuildServer() often requires them.
 	data.StartDatabases()
 	data.VerifyDatabases()
+
+	// 4. SIGNAL SUCCESSFUL START
+	// Crucial: We signal "Running" BEFORE the potentially slow index hydration
+	// or orphan cleanup to avoid the SCM 30-second timeout.[cite: 1, 8]
+	changes <- svc.Status{State: svc.Running, Accepts: cmdsAccepted}
+
+	// 5. Post-Start Heavy Lifting
+	// Now that the service is "officially" up, we do the maintenance.
 	data.CleanupOrphans()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Start your background maintenance and monitoring goroutines
+	// setupBackgroundTasks handles CPE/CVE updates and index hydration.
 	setupBackgroundTasks(ctx)
 
-	// Build the HTTP Server
+	// 6. Build and Start the Web Server
 	srv, err := handlers.BuildServer()
 	if err != nil {
 		logs.Sys.Error("Failed to initialize server", "error", err)
 		return false, 1
 	}
 
-	// Start Server goroutine
 	srvErr := make(chan error, 1)
 	go func() {
 		certPath := filepath.Join(internal.BaseDir, "internal", "data", "server.crt")
 		keyPath := filepath.Join(internal.BaseDir, "internal", "data", "server.key")
 		logs.Sys.Info("Watchtower EDR Server starting as Service", "port", "443")
+
+		// This call blocks until the server is closed or crashes.
 		if err := srv.ListenAndServeTLS(certPath, keyPath); err != nil && err != http.ErrServerClosed {
 			srvErr <- err
 		}
 	}()
 
-	// Signal to Windows that the service is now "Running"
-	changes <- svc.Status{State: svc.Running, Accepts: cmdsAccepted}
-
+	// 7. Main Control Loop
 loop:
 	for {
 		select {
@@ -77,8 +91,10 @@ loop:
 		case c := <-r:
 			switch c.Cmd {
 			case svc.Interrogate:
+				// Respond with current status as requested by Windows.
 				changes <- c.CurrentStatus
 			case svc.Stop, svc.Shutdown:
+				// Start the graceful exit.
 				logs.Sys.Info("Shutdown signal received from Windows SCM")
 				break loop
 			default:
@@ -87,13 +103,13 @@ loop:
 		}
 	}
 
-	// 2. RUN ALL GRACEFUL SHUTDOWN LOGIC
+	// 8. Graceful Shutdown Sequence
 	changes <- svc.Status{State: svc.StopPending}
 
-	cancel() // Trigger context cancellation for all background workers
+	cancel() // Stops all background tickers and index workers.[cite: 8]
 
 	logs.Sys.Info("Waiting for background workers to exit...")
-	data.WG.Wait()
+	data.WG.Wait() // Wait for goroutines that registered with the WaitGroup.
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
@@ -105,6 +121,7 @@ loop:
 	data.CloseDatabases()
 	logs.Sys.Info("Watchtower is now offline.")
 
+	// Final status update to Windows SCM.
 	changes <- svc.Status{State: svc.Stopped}
 	return
 }
@@ -122,6 +139,10 @@ func main() {
 		seedCmd.Parse(os.Args[2:])
 
 		internal.SetupDirectory()
+		if internal.BaseDir == "" {
+			fmt.Println("Error: Could not determine executable directory.")
+			os.Exit(1)
+		}
 
 		logs.InitLogger(internal.BaseDir)
 

@@ -5,6 +5,8 @@ DefaultDirName={autopf}\WatchtowerEDR
 DefaultGroupName=Watchtower EDR
 PrivilegesRequired=admin
 OutputBaseFilename=WatchtowerServerInstaller
+; FIXED: Removed the trailing 'os' from x64
+ArchitecturesInstallIn64BitMode=x64compatible
 
 ; --- Icon Settings ---
 SetupIconFile=.\icon.ico
@@ -17,27 +19,40 @@ Source: "..\..\web\*"; DestDir: "{app}\web"; Flags: ignoreversion recursesubdirs
 Source: "..\..\internal\data\*"; DestDir: "{app}\internal\data"; Flags: ignoreversion recursesubdirs
 
 [Dirs]
-; Granting full permissions to the data folder ensures the Go app can write config.yaml and databases
-Name: "{app}\internal\data"; Permissions: everyone-full
-Name: "{app}\internal\data\logs"; Permissions: everyone-full
+; Ensure the System account and Users have explicit rights to modify files here
+Name: "{app}\internal\data"; Permissions: users-modify system-full
+Name: "{app}\internal\data\logs"; Permissions: users-modify system-full
 
 [Icons]
 Name: "{group}\Watchtower EDR"; Filename: "{app}\watchtower.exe"; IconFilename: "{app}\icon.ico"
 
 [Run]
-; WorkingDir is critical so the Go app's relative path logic finds the internal folder
+; 1. Provisioning - Ensure this runs before the service starts
 Filename: "{app}\watchtower.exe"; \
     Parameters: "seed -user ""{code:GetUser}"" -email ""{code:GetEmail}"" -pass ""{code:GetPass}"" -fqdn ""{code:GetFQDN}"" -nist ""{code:GetNistKey}"""; \
-    WorkingDir: "{app}"; Flags: runhidden
-    
-; Register and start the background service
-Filename: "{sys}\sc.exe"; Parameters: "create WatchtowerEDR binPath= ""{app}\watchtower.exe"" start= auto"; Flags: runhidden
+    WorkingDir: "{app}"; Flags: runhidden waituntilterminated
+
+; NEW: Delete the log created by 'seed' so the Service starts fresh
+Filename: "{cmd}"; Parameters: "/c del ""{app}\internal\data\logs\watchtower.log"""; Flags: runhidden
+
+; 2. Registration - Using {quote} for cleaner path handling. 
+; Note: The space after 'binPath=' is mandatory for sc.exe
+Filename: "{sys}\sc.exe"; \
+    Parameters: "create WatchtowerEDR binPath= ""\""{app}\watchtower.exe\"""" DisplayName= ""Watchtower EDR"" start= auto"; \
+    Flags: runhidden waituntilterminated
+
+; 3. Description - Helpful for users looking at services.msc
+Filename: "{sys}\sc.exe"; \
+    Parameters: "description WatchtowerEDR ""Watchtower Endpoint Detection and Response Server"""; \
+    Flags: runhidden
+
+; 4. Startup
 Filename: "{sys}\sc.exe"; Parameters: "start WatchtowerEDR"; Flags: runhidden
 
 [UninstallRun]
-Filename: "{sys}\sc.exe"; Parameters: "stop WatchtowerEDR"; Flags: runhidden; RunOnceId: "StopWatchtowerService"
-Filename: "{sys}\sc.exe"; Parameters: "delete WatchtowerEDR"; Flags: runhidden; RunOnceId: "DeleteWatchtowerService"
-
+; Stop and Delete with 'RunOnceId' to prevent duplicate execution
+Filename: "{sys}\sc.exe"; Parameters: "stop WatchtowerEDR"; Flags: runhidden; RunOnceId: "StopService"
+Filename: "{sys}\sc.exe"; Parameters: "delete WatchtowerEDR"; Flags: runhidden; RunOnceId: "DeleteService"
 [Code]
 var
   ConfigPage: TInputQueryWizardPage;
@@ -50,14 +65,12 @@ begin
     'Server Configuration', 'Admin Account & Network Settings',
     'Please enter the initial setup details for your Watchtower EDR instance.');
 
-  // Using False as the second parameter acts as an empty default string in this context
   Idx := ConfigPage.Add('Server FQDN (e.g. edr.example.com):', False);
-  Idx := ConfigPage.Add('NIST NVD API Key (https://nvd.nist.gov/developers/request-an-api-key):', False);
+  Idx := ConfigPage.Add('NIST NVD API Key:', False);
   Idx := ConfigPage.Add('Admin Username:', False);
   Idx := ConfigPage.Add('Admin Email:', False);
   Idx := ConfigPage.Add('Admin Password (4-16 characters):', True);
 
-  // Set default admin username
   ConfigPage.Values[2] := 'admin';
 end;
 
@@ -74,8 +87,6 @@ begin
     end;
   end;
 end;
-
-{ Helper functions to pass Wizard data to the [Run] section }
 
 function GetFQDN(Param: String): String;
 begin
